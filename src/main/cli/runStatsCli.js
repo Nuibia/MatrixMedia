@@ -7,6 +7,7 @@
 
 import { collectAccount } from "../services/dataStats/collector.js";
 import store from "../services/dataStats/store.js";
+import { buildAccountPartition } from "../../shared/accountPartition.js";
 
 const normalizeTitle = (s) =>
   String(s || "").replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
@@ -16,7 +17,8 @@ function print(data) {
 }
 
 export async function runStatsCli({ action, platform, phone, title }) {
-  const partition = `persist:${phone}${platform}`;
+  // 与登录窗口同一套 partition 规则（账号名取 "-" 前缀），否则带 "-" 的账号读不到登录态
+  const partition = buildAccountPartition(phone, platform);
 
   if (action === "sync") {
     const startedAt = Date.now();

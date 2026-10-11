@@ -174,8 +174,12 @@ router.post("/stats/sync", async function (req, res) {
   try {
     const { collectAccount } = require("../../services/dataStats/collector.js");
     const store = require("../../services/dataStats/store.js");
+    // 与登录窗口同一套 partition 规则（账号名取 "-" 前缀），否则带 "-" 的账号读不到登录态
+    const { buildAccountPartition } = await import(
+      "../../../shared/accountPartition.js"
+    );
     const data = await collectAccount({
-      partition: `persist:${phone}${pt}`,
+      partition: buildAccountPartition(phone, pt),
       platform: pt,
     });
     store.mergeDaily(phone, pt, data.overview, data.fansHistory);

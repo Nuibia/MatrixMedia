@@ -2,6 +2,7 @@
  * 数据统计渲染层 API：封装主进程采集/读取 IPC。
  */
 import { ipcRenderer } from "electron";
+import { buildAccountPartition } from "../../shared/accountPartition.js";
 
 /** 不参与统计的平台（无数据接口） */
 const STATS_EXCLUDED = new Set(["番茄视频", "掘金"]);
@@ -25,7 +26,8 @@ export function buildCollectAccounts(filter) {
       const pt = (child.meta && child.meta.pt) || child.path;
       if (!pt || STATS_EXCLUDED.has(pt)) continue;
       if (filter && !filter(phone, pt)) continue;
-      accounts.push({ group: phone, platform: pt, partition: `persist:${phone}${pt}` });
+      // partition 必须与登录窗口一致（账号名取 "-" 前缀），否则带 "-" 的账号读不到登录态
+      accounts.push({ group: phone, platform: pt, partition: buildAccountPartition(phone, pt) });
     }
   }
   return accounts;

@@ -1,5 +1,6 @@
 import { ipcRenderer } from "electron";
 import ptConfig from "@/utils/configUrl";
+import { buildAccountPartition } from "../../shared/accountPartition.js";
 
 /**
  * 统一的「打开独立 BrowserWindow 进行账号登录」入口。
@@ -12,7 +13,8 @@ import ptConfig from "@/utils/configUrl";
  * 弹一个普通 BrowserWindow（partition / UA 跟 puppeteer 发布窗一致），
  * 反爬识别不到 webview 特征，登录态可以直接复用到发布流程。
  *
- * @param {Object} item    至少包含 pt + (partition 或 phone)；可选 url
+ * @param {Object} item    至少包含 pt + (partition 或 phone)；可选 url。
+ *                         partition 须为完整值（buildAccountPartition 规则拼好），原样使用不再加工
  * @returns {Promise<{ok:boolean,reused?:boolean,message?:string}>}
  */
 export default async function openLoginWindow(item) {
@@ -23,9 +25,11 @@ export default async function openLoginWindow(item) {
   const cfg = ptConfig[pt];
   if (!cfg) return { ok: false, message: "未找到平台配置: " + pt };
 
+  // 传入的 partition 视为完整值直接使用；历史上对它再 split("-")[0] 会把
+  // 带 "-" 账号名的完整 partition 截断（连平台后缀一起丢掉），拼出错误分区
   const partition =
-    (item.partition && String(item.partition).split("-")[0]) ||
-    "persist:" + String(item.phone || "").split("-")[0] + pt;
+    (item.partition && String(item.partition)) ||
+    buildAccountPartition(item.phone, pt);
 
   const url = item.url || cfg.index;
   const useragent = cfg.useragent;

@@ -32,7 +32,7 @@
 
 | 资产 | 位置 | 复用点 |
 | --- | --- | --- |
-| 分组→partition 规则 | `accountManager/index.vue` (`persist:` + 分组 + 平台) | 枚举当前分组下所有平台环境 |
+| 分组→partition 规则 | `src/shared/accountPartition.js`（`persist:` + 分组名取 `-` 前缀 + 平台） | 枚举当前分组下所有平台环境；登录/发布/采集所有入口必须统一走 `buildAccountPartition`，手写拼接会导致带 `-` 的账号登录态对不上 |
 | 平台清单与入口 URL | `src/main/config/ptConfig.js` | 9 个平台的 index/listIndex，作为「先落地的页面」 |
 | Cookie 读取 | `services/getCookie.js` (`session.fromPartition`) | 登录态检测、辅助请求 |
 | 登录窗口管理 | `services/accountLoginWindowManager.js` | 防止与登录窗口冲突（同 partition 互斥） |
