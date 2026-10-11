@@ -3,7 +3,8 @@
 /**
  * 验证「发布失败截图」：
  * 1. buildFailScreenshotName：平台/账号进文件名，非法字符被替换
- * 2. capturePublishFailureScreenshot：落盘 PNG，页面已关闭时返回空串且不抛错
+ * 2. capturePublishFailureScreenshot：落盘 PNG，页面已关闭时返回空串且不抛错；
+ *    CDP 截图超时/页面不可用时用 window.webContents.capturePage 兜底
  * 3. readFailScreenshotDataUrl：读回 base64 data URL，文件不存在时返回 ok:false
  * 4. pruneFailScreenshots：超期文件被清理，未超期保留
  * 5. replyPublishFailure / replyPublishOutcome：失败回执带 failScreenshot 字段
@@ -104,6 +105,50 @@ function tmpDir(name) {
     { dir }
   );
   assert.strictEqual(boom, "", "截图异常不应向上抛");
+
+  // 2.2 CDP 截图超时（hidden 窗口不产帧）→ capturePage 兜底成功
+  const mockWindow = () => ({
+    isDestroyed: () => false,
+    webContents: {
+      isDestroyed: () => false,
+      capturePage: async () => ({
+        isEmpty: () => false,
+        toPNG: () => PNG_1PX,
+      }),
+    },
+  });
+  const hangingPage = {
+    isClosed: () => false,
+    screenshot: () => new Promise(() => {}), // 永不 resolve，模拟 CDP 挂住
+  };
+  const fallbackFile = await capturePublishFailureScreenshot(
+    hangingPage,
+    { pt: "快手", phone: "1370000" },
+    { dir, window: mockWindow(), timeoutMs: 50 }
+  );
+  assert.ok(
+    fallbackFile && fs.existsSync(fallbackFile),
+    "CDP 超时后应由 capturePage 兜底出图"
+  );
+
+  // 2.3 页面已关闭但窗口还在 → 同样走 capturePage 兜底
+  const closedPageFallback = await capturePublishFailureScreenshot(
+    { isClosed: () => true, screenshot: async () => PNG_1PX },
+    { pt: "快手", phone: "1370000" },
+    { dir, window: mockWindow(), timeoutMs: 50 }
+  );
+  assert.ok(
+    closedPageFallback && fs.existsSync(closedPageFallback),
+    "页面关闭时应由 capturePage 兜底出图"
+  );
+
+  // 2.4 CDP 超时且窗口已销毁 → 返回空串不抛
+  const noShot = await capturePublishFailureScreenshot(
+    hangingPage,
+    { pt: "快手" },
+    { dir, window: { isDestroyed: () => true }, timeoutMs: 50 }
+  );
+  assert.strictEqual(noShot, "", "两个截图源都不可用时应返回空串");
 
   // 3. 读回 data URL
   const read = readFailScreenshotDataUrl(file);

@@ -138,30 +138,75 @@ function canScreenshot(page) {
 }
 
 /**
+ * CDP 截图。hidden 发布窗口在 macOS 上会被判定为遮挡，合成器停止产帧，
+ * Page.captureScreenshot 会一直等一帧新画面直到超时——失败（含超时）
+ * 返回 null，交给 webContents.capturePage 兜底。
+ */
+async function tryPageScreenshot(page, timeoutMs) {
+  if (!canScreenshot(page)) return null;
+  try {
+    // fullPage 在长页面 / 懒加载站点上容易超时或产出巨图，这里只截可视区，
+    // 弹窗、报错提示都在首屏，足够定位问题。
+    const buffer = await withScreenshotTimeout(
+      () => page.screenshot({ type: "png" }),
+      timeoutMs
+    );
+    return buffer && buffer.length ? buffer : null;
+  } catch (e) {
+    console.warn("[fail-shot] page.screenshot 截图失败:", (e && e.message) || e);
+    return null;
+  }
+}
+
+/**
+ * Electron 原生截图兜底：webContents.capturePage 走离屏纹理拷贝，
+ * 不依赖窗口可见性，hidden 窗口也能截到，正好补上 CDP 截图的盲区。
+ */
+async function tryWebContentsCapture(window, timeoutMs) {
+  try {
+    if (!window || typeof window.isDestroyed !== "function" || window.isDestroyed()) {
+      return null;
+    }
+    const contents = window.webContents;
+    if (!contents || typeof contents.capturePage !== "function") return null;
+    if (typeof contents.isDestroyed === "function" && contents.isDestroyed()) {
+      return null;
+    }
+    const image = await withScreenshotTimeout(() => contents.capturePage(), timeoutMs);
+    if (!image || typeof image.isEmpty !== "function" || image.isEmpty()) return null;
+    return image.toPNG();
+  } catch (e) {
+    console.warn("[fail-shot] capturePage 兜底截图失败:", (e && e.message) || e);
+    return null;
+  }
+}
+
+/**
  * 截取当前发布页并落盘。
+ *
+ * 优先 CDP page.screenshot；hidden 窗口下它可能等不到合成器新帧而超时，
+ * 此时用 deps.window 的 webContents.capturePage 兜底，尽量不留空图。
  *
  * 任何异常都吞掉并返回空串：截图只是辅助定位，绝不能因为截图失败
  * 把一条本来能正常上报的失败回执打断。
  *
  * @param {import("puppeteer-core").Page} page
  * @param {object} data 发布任务数据（取 pt / phone 命名）
- * @param {object} [deps] 便于单测注入
+ * @param {object} [deps] 便于单测注入；deps.window 为 Electron BrowserWindow 兜底截图源
  * @returns {Promise<string>} 截图绝对路径，失败返回 ""
  */
 export async function capturePublishFailureScreenshot(page, data = {}, deps = {}) {
   const fileSystem = deps.fs || fs;
   const dir = deps.dir || getFailScreenshotDir();
+  const timeoutMs =
+    deps.timeoutMs === undefined ? FAIL_SCREENSHOT_TIMEOUT_MS : deps.timeoutMs;
   try {
-    if (!canScreenshot(page)) return "";
+    const buffer =
+      (await tryPageScreenshot(page, timeoutMs)) ||
+      (await tryWebContentsCapture(deps.window, timeoutMs));
+    if (!buffer || !buffer.length) return "";
     fileSystem.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, buildFailScreenshotName(data, deps.now));
-    // fullPage 在长页面 / 懒加载站点上容易超时或产出巨图，这里只截可视区，
-    // 弹窗、报错提示都在首屏，足够定位问题。
-    const buffer = await withScreenshotTimeout(
-      () => page.screenshot({ type: "png" }),
-      deps.timeoutMs === undefined ? FAIL_SCREENSHOT_TIMEOUT_MS : deps.timeoutMs
-    );
-    if (!buffer || !buffer.length) return "";
     fileSystem.writeFileSync(file, buffer);
     console.log(`[fail-shot] 已保存发布失败截图: ${file}`);
     pruneFailScreenshots(dir, FAIL_SCREENSHOT_RETENTION_DAYS, Date.now());

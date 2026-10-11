@@ -19,14 +19,7 @@ import { resolveChromePath } from "./chromeConfig.js";
 import xhsChromeHandler from "./upLoad/xhsChrome.js";
 import { isPlatformLoginUrl } from "../../shared/platformPageState.js";
 import { normalizeVideoMetadata } from "../../shared/videoMetadata.js";
-import {
-  FAIL_SCREENSHOT_RETENTION_DAYS,
-  buildFailScreenshotName,
-  capturePublishFailureScreenshot,
-  getFailScreenshotDir,
-  pruneFailScreenshots,
-  withScreenshotTimeout,
-} from "./upLoad/failureScreenshot.js";
+import { capturePublishFailureScreenshot } from "./upLoad/failureScreenshot.js";
 
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 
@@ -340,28 +333,11 @@ async function doUpload(data, transport, queueDone, runtimeTask) {
    * 任务终结前截一张发布页，作为失败原因的证据。
    *
    * 这些分支（URL 不匹配 / 页面异常 / 拿不到处理器）里 page 往往已经失效或窗口
-   * 正在关闭，先用 page 试，再回退到 activeWin 的 webContents.capturePage()。
-   * 整个函数绝不抛错 —— 截图只是辅助信息，不能影响失败回执本身。
+   * 正在关闭：capturePublishFailureScreenshot 内部先用 page 试 CDP 截图，
+   * 失败/超时再回退到 activeWin 的 webContents.capturePage()，绝不抛错。
    */
-  const snapshotForFailure = async () => {
-    try {
-      const fromPage = await capturePublishFailureScreenshot(activePage, data);
-      if (fromPage) return fromPage;
-      if (!activeWin || activeWin.isDestroyed()) return "";
-      const image = await withScreenshotTimeout(() => activeWin.webContents.capturePage());
-      if (!image || image.isEmpty()) return "";
-      const dir = getFailScreenshotDir();
-      await fs.promises.mkdir(dir, { recursive: true });
-      const file = path.join(dir, buildFailScreenshotName(data));
-      await fs.promises.writeFile(file, image.toPNG());
-      console.log(`[fail-shot] 已保存发布失败截图: ${file}`);
-      pruneFailScreenshots(dir, FAIL_SCREENSHOT_RETENTION_DAYS, Date.now());
-      return file;
-    } catch (e) {
-      console.warn("[fail-shot] 兜底截图失败:", (e && e.message) || e);
-      return "";
-    }
-  };
+  const snapshotForFailure = () =>
+    capturePublishFailureScreenshot(activePage, data, { window: activeWin });
 
   /** 带截图路径的失败回执（没有截到图时不带该字段） */
   const replyFailureWithShot = async (payload) => {

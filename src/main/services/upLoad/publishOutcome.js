@@ -83,8 +83,9 @@ export async function replyPublishOutcome({
     payload.publishAbnormal = true;
     payload.outcome = "publish_abnormal";
     payload.needsAttention = true;
-    // 疑似没发出去时页面还停在发布页（通常是平台校验提示 / 风控弹窗），先截图再关窗
-    const shot = await capturePublishFailureScreenshot(page, data);
+    // 疑似没发出去时页面还停在发布页（通常是平台校验提示 / 风控弹窗），先截图再关窗。
+    // 传入 window：hidden 窗口下 CDP 截图可能等不到合成帧超时，用 capturePage 兜底。
+    const shot = await capturePublishFailureScreenshot(page, data, { window });
     if (shot) payload.failScreenshot = shot;
     console.warn(
       `[publish] ${data.pt} ${PUBLISH_ABNORMAL_MESSAGE}（地址：${urlAfter}）`
@@ -123,7 +124,7 @@ export async function replyPublishFailure({
   extraPayload = {},
   closeWindow = true,
 }) {
-  const shot = await capturePublishFailureScreenshot(page, data);
+  const shot = await capturePublishFailureScreenshot(page, data, { window });
   try {
     event.reply("puppeteerFile-done", {
       ...data,
