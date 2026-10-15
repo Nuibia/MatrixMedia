@@ -150,6 +150,7 @@ export function loginHelpText() {
 可选 --puppeteer-headless（仅抖音）：用系统 Chrome/Chromium 真无头 + page.screenshot，userDataDir 与 partition 一致（需 PUPPETEER_EXECUTABLE_PATH 或已安装 Chrome/Chromium）。无 TTY 时请配合 --save-qr-png。
 
 视频号登录支持 --show 弹出登录窗口，扫码后窗口自动关闭。
+重复登录时会先验证既有会话：auth_data 鉴权仍有效则直接返回（退出码 0），不再展示二维码；--force 可强制重登。
 若内置窗口扫码后提示没有可登录的视频号，可用 --browser chrome 在本机 Chrome 中登录。
 系统 Chrome 使用独立账号目录，鉴权通过后同步到同一 partition；不会读取日常 Chrome 的登录态。
 
@@ -164,6 +165,7 @@ export function loginHelpText() {
       --save-qr-png <p>   每次刷新写 PNG（优先 #animate_qrcode_container 内 data: 原图）
       --puppeteer-headless  使用 Puppeteer 无头 Chromium（仅抖音，视频号不支持）
       --timeout-sec <n>   最长等待秒数，默认 900（15 分钟）
+      --force            视频号：即使当前会话仍有效也强制重新扫码（换号时使用；失败会自动恢复原会话）
   -h, --help            显示本帮助
 
 调试: MATRIX_CLI_QR_DEBUG=1 向 stderr 输出 [MatrixMedia][cli-qr] 日志（约每 6s 一次页面诊断）。

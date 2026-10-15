@@ -23,6 +23,8 @@ import {
   normalizeSphPartition,
 } from "./sphSessionUtil.js";
 import { prepareSphAccountLoginSession } from "../sphLoginSession.js";
+import { probeSphSession } from "../sphAuthProbe.js";
+import { isSphCookie, replaceSphCookies } from "../sphCookieSession.js";
 import {
   CLI_LOGIN_QR_FIRST_DELAY_MS,
   CLI_LOGIN_QR_REFRESH_MS,
@@ -48,6 +50,18 @@ function cliQrDebugLog(...args) {
 
 function stripAnsi(s) {
   return String(s).replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+/** 比较两组 sph Cookie 是否一致（domain|path|name|value 全等），用于判断登录过程是否改动了 jar */
+function sphCookiesEqual(a, b) {
+  const key = (c) => [c.domain, c.path, c.name, c.value].join("|");
+  const sa = (a || []).map(key).sort();
+  const sb = (b || []).map(key).sort();
+  if (sa.length !== sb.length) return false;
+  for (let i = 0; i < sa.length; i++) {
+    if (sa[i] !== sb[i]) return false;
+  }
+  return true;
 }
 
 /* ---- iframe 内二维码选择器（按优先级排列） ---- */
@@ -86,6 +100,16 @@ async function captureQrFromIframe(page) {
     frames.length,
     frames.map((f) => f.url())
   );
+
+  // 仅当页面处于登录流程（login.html / qrconnect iframe）时才截取二维码；
+  // 已登录等平台首页没有二维码，继续执行会把头像/logo 当成二维码截出来
+  const inLoginFlow = frames.some((f) =>
+    /login|qrconnect|qrcode/i.test(String(f.url() || ""))
+  );
+  if (!inLoginFlow) {
+    cliQrDebugLog("页面不在登录流程，跳过二维码截取");
+    return null;
+  }
 
   // 优先检查子 frame（login-for-iframe），再检查主 frame
   const sortedFrames = [
@@ -375,7 +399,57 @@ export async function runSphCliLogin({
     return 0;
   }
   // 不清除 cookie，避免破坏 login-for-iframe 页面加载
-  const oldSessionId = await getSphSessionId(part);
+  let oldSessionId = await getSphSessionId(part);
+
+  // 重复登录先验证既有会话：服务端鉴权有效则直接返回，无需再次扫码。
+  //（sessionid 本地不过期不代表服务端有效，必须探针确认；--force 用于换号强制重登）
+  if (oldSessionId && !force) {
+    const verdict = await probeSphSession(part);
+    if (verdict.ok && verdict.loggedIn === true) {
+      console.log(
+        "视频号：当前 partition 会话仍然有效（auth_data 鉴权通过），无需再次登录。如需换号请加 --force。"
+      );
+      return 0;
+    }
+    if (!verdict.ok) {
+      console.log(
+        "视频号：鉴权探测失败（" +
+          (verdict.reason || "网络异常") +
+          "），按既有 Cookie 视为已登录。如需换号请加 --force。"
+      );
+      return 0;
+    }
+    console.log(
+      "[sph-cli-login] 既有会话已失效（" +
+        (verdict.reason || "未知原因") +
+        "），将重新扫码登录"
+    );
+  }
+
+  // 登录前快照 sph Cookie：扫码会覆盖既有会话，若最终未能确认新登录，
+  // 非成功退出时恢复快照，保住该分区原有有效会话
+  const sphSes = electronSession.fromPartition(part);
+  let cookieSnapshot = null;
+  try {
+    cookieSnapshot = (await sphSes.cookies.get({})).filter(isSphCookie);
+  } catch (_) {
+    cookieSnapshot = null;
+  }
+
+  // --force：会话仍有效时 /platform 不会展示登录页（没有二维码可扫），
+  // 先清除既有 sph Cookie 强制进入登录页；失败/超时退出由上面的快照自动恢复
+  if (force && oldSessionId) {
+    try {
+      await replaceSphCookies(sphSes, []);
+      oldSessionId = null;
+      console.log(
+        "[sph-cli-login] --force：已清除既有 sph Cookie，强制重新扫码登录（失败会自动恢复）"
+      );
+    } catch (e) {
+      console.warn("[sph-cli-login] --force 清除 Cookie 失败:", e && e.message);
+    }
+  }
+
   if (oldSessionId) {
     console.log("[sph-cli-login] 检测到旧 sessionid，将等待新的登录会话");
   }
@@ -421,6 +495,24 @@ export async function runSphCliLogin({
           await ses.cookies.flushStore();
           ses.flushStorageData();
         } catch (_) {}
+      } else if (cookieSnapshot) {
+        // 未确认新登录的退出（超时/关窗/失败）：若扫码过程改动了 Cookie，
+        // 恢复登录前快照，避免无效新会话覆盖该分区既有有效会话。
+        // 必须在关窗前完成（窗口销毁后 cookies 写操作可能挂起），并加超时兜底
+        try {
+          const now = (await sphSes.cookies.get({})).filter(isSphCookie);
+          if (!sphCookiesEqual(now, cookieSnapshot)) {
+            await Promise.race([
+              replaceSphCookies(sphSes, cookieSnapshot),
+              new Promise((_, reject) =>
+                setTimeout(() => reject(new Error("恢复会话超时")), 10000)
+              ),
+            ]);
+            console.log("未确认新的视频号登录，已恢复登录前的会话 Cookie。");
+          }
+        } catch (e) {
+          console.warn("[sph-cli-login] 恢复登录前会话失败:", e && e.message);
+        }
       }
 
       try {
@@ -437,6 +529,7 @@ export async function runSphCliLogin({
         }
       } catch (_) {}
       win = null;
+
       if (opts.clearTerminal && useTerminalQr && process.stdout.isTTY) {
         clearTerminalScreen();
       }
@@ -581,17 +674,69 @@ export async function runSphCliLogin({
         console.log("请在浏览器窗口中完成视频号登录。partition:", part);
       }
 
-      // 轮询 sessionid Cookie —— 检测到与旧值不同的新 sessionid 才算登录成功
+      // 轮询 sessionid Cookie —— 检测到与旧值不同的新 sessionid 后，
+      // 还须通过 auth_data 鉴权探针确认会话可用才算登录成功：
+      // 微信号未开通视频号 / 多号待选择时同样会产生新 sessionid，
+      // 只看"变了"会误报成功（采集端随后被弹回登录页）
+      let probing = false;
+      let probedSessionId = null;
+      let rejectedSessionId = null;
+      let unknownProbeCount = 0;
       pollTimer = setInterval(() => {
+        if (probing) return;
         getSphSessionId(part)
-          .then((newId) => {
+          .then(async (newId) => {
             if (!newId || settled) return;
             // 无旧值 → 新出现即可；有旧值 → 必须不同
-            if (!oldSessionId || newId !== oldSessionId) {
-              finish(0, {
-                clearTerminal: true,
-                log: "视频号登录成功，会话已写入 partition，可执行 cli publish。",
-              });
+            if (oldSessionId && newId === oldSessionId) return;
+            // 已判失效的 sessionid 不再重复探测，等待重新扫码
+            if (newId === rejectedSessionId) return;
+            if (newId !== probedSessionId) {
+              probedSessionId = newId;
+              unknownProbeCount = 0;
+            }
+            probing = true;
+            try {
+              const verdict = await probeSphSession(part);
+              if (settled) return;
+              if (verdict.ok && verdict.loggedIn === true) {
+                finish(0, {
+                  clearTerminal: true,
+                  log: "视频号登录成功，会话已写入 partition，可执行 cli publish。",
+                });
+                return;
+              }
+              if (verdict.ok && verdict.loggedIn === false) {
+                rejectedSessionId = newId;
+                console.warn(
+                  "检测到新会话但未通过视频号鉴权（" +
+                    (verdict.reason || "未知原因") +
+                    "）。该微信号可能未开通视频号或需在页面内选择账号，已刷新登录页，请重新扫码。"
+                );
+                // 重新加载登录页，让二维码恢复可扫状态
+                try {
+                  if (piePage) {
+                    await piePage
+                      .goto(cfg.index, {
+                        waitUntil: "domcontentloaded",
+                        timeout: 30000,
+                      })
+                      .catch(() => {});
+                  }
+                } catch (_) {}
+                return;
+              }
+              // 探测结果未知（网络异常等）：同一 sessionid 连续多次未知
+              // 才退回按 sessionid 变化判成功，避免断网时永远卡死
+              unknownProbeCount += 1;
+              if (unknownProbeCount >= 3) {
+                finish(0, {
+                  clearTerminal: true,
+                  log: "视频号登录成功（鉴权探测多次失败，按 sessionid 变化判定），可执行 cli publish。",
+                });
+              }
+            } finally {
+              probing = false;
             }
           })
           .catch((e) => {
