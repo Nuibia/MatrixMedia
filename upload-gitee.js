@@ -32,10 +32,19 @@ let pushBody = {
   target_commitish,
 };
 
-// 如果 Releases 超过三个，删除最旧的 Release
-deleteOldestRelease();
-// 发布
-createRelease();
+// 先清理旧 Release 再发布：Gitee 附件配额按仓库总量计算（1 GB），
+// 删除与上传若并发进行，上传时旧附件还没释放配额，会以 400 超出配额失败。
+main();
+
+async function main() {
+  try {
+    await pruneOldReleases();
+  } catch (e) {
+    // 清理失败不阻断发布，新版本照常创建，附件能传几个传几个
+    console.error("清理旧 Release 失败，继续发布:", (e && e.message) || e);
+  }
+  createRelease();
+}
 
 /** 额外文件路径：node upload-gitee.js <token> <version> [file ...]（上传 .exe / .dmg / .AppImage） */
 function resolveUploadPaths() {
@@ -267,68 +276,93 @@ function tgaGetRelease(callback) {
 }
 
 // 获取所有 Releases
-function getAllReleases(callback) {
-  const options = {
-    hostname: baseUrl,
-    path:
-      createReleaseApi + "?page=1&per_page=100&access_token=" + access_token,
-    method: "GET",
-    headers: {
-      "Content-Type": "application/json",
-      // 可能还需要其他标头，比如授权信息
-    },
-  };
+function getAllReleases() {
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: baseUrl,
+      path:
+        createReleaseApi + "?page=1&per_page=100&access_token=" + access_token,
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        // 可能还需要其他标头，比如授权信息
+      },
+    };
 
-  const req = https.request(options, (res) => {
-    let data = "";
+    const req = https.request(options, (res) => {
+      let data = "";
 
-    res.on("data", (chunk) => {
-      data += chunk;
-    });
+      res.on("data", (chunk) => {
+        data += chunk;
+      });
 
-    res.on("end", () => {
-      callback(JSON.parse(data));
-    });
-  });
-
-  req.on("error", (error) => {
-    console.error("Error fetching releases:", error);
-  });
-
-  req.end();
-}
-// 删除最旧的 Release
-function deleteOldestRelease() {
-  getAllReleases((releases) => {
-    if (!Array.isArray(releases) || releases.length === 0) {
-      console.log("当前没有任何 Release，跳过删除");
-      return;
-    }
-    console.log("已有 Release 数量:", releases.length);
-    if (releases.length >= saveVision) {
-      // 找到最旧的 Release
-      const oldestRelease = releases[0];
-      // 删除最旧的 Release
-      const options = {
-        hostname: baseUrl,
-        path:
-          createReleaseApi +
-          `/${oldestRelease.id}?access_token=${access_token}`,
-        method: "DELETE",
-      };
-      const req = https.request(options, (res) => {
-        if (res.statusCode === 204) {
-          console.log("删除成功");
-        } else {
-          console.error("Error deleting release:", res.statusCode);
+      res.on("end", () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch (e) {
+          reject(new Error("解析 Release 列表失败: " + data.slice(0, 200)));
         }
       });
-      req.on("error", (error) => {
-        console.error("Error deleting release:", error);
-      });
-      req.end();
-    } else {
-      console.log("不需要删除");
-    }
+    });
+
+    req.on("error", reject);
+    req.end();
   });
+}
+
+function deleteRelease(id) {
+  return new Promise((resolve) => {
+    const options = {
+      hostname: baseUrl,
+      path: createReleaseApi + `/${id}?access_token=${access_token}`,
+      method: "DELETE",
+    };
+    const req = https.request(options, (res) => {
+      res.resume();
+      if (res.statusCode === 204) {
+        console.log("删除成功:", id);
+      } else {
+        console.error("删除 Release 失败:", id, res.statusCode);
+      }
+      // 单个删除失败不阻断，继续删其余的
+      resolve();
+    });
+    req.on("error", (error) => {
+      console.error("删除 Release 出错:", id, error.message || error);
+      resolve();
+    });
+    req.end();
+  });
+}
+
+/**
+ * 只保留最近 saveVision 个 Release（含本次要发的版本），多余的从最旧开始删。
+ *
+ * 注意三点旧实现的坑：
+ * 1. 接口返回顺序无保证（一般新的在前），不能直接取 [0] 当最旧，按 created_at 排序；
+ * 2. 不能只删一个——存量超配额时新附件依然传不上去，要删到达标为止；
+ * 3. 本次 tag 可能已存在（上次发布中途失败重跑），清理时要把它排除在外，
+ *    否则重跑会把上一个可用版本也删掉。
+ */
+async function pruneOldReleases() {
+  const releases = await getAllReleases();
+  if (!Array.isArray(releases) || releases.length === 0) {
+    console.log("当前没有任何 Release，跳过删除");
+    return;
+  }
+  console.log("已有 Release 数量:", releases.length);
+  // 除本次要发的版本外，其余按创建时间升序，最旧的排在前面
+  const others = releases.filter((rel) => rel.tag_name !== pushBody.tag);
+  const sorted = [...others].sort(
+    (a, b) => new Date(a.created_at) - new Date(b.created_at)
+  );
+  const needDelete = sorted.length - (saveVision - 1);
+  if (needDelete <= 0) {
+    console.log("不需要删除");
+    return;
+  }
+  for (const rel of sorted.slice(0, needDelete)) {
+    console.log("删除旧 Release:", rel.tag_name || rel.name || rel.id);
+    await deleteRelease(rel.id);
+  }
 }
