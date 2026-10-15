@@ -67,8 +67,8 @@ export async function runDouyinCliLogin({
       "提示: stdout 非 TTY，无法绘制终端二维码方块图。可改用 --puppeteer-headless、--save-qr-png，或在有显示环境用 xvfb-run 等。"
     );
   }
-  if (!useTerminalQr && !show) {
-    console.error("错误: 当前环境无法使用终端二维码且未指定 --show，无法继续登录。");
+  if (!useTerminalQr && !show && !saveQrPngPath) {
+    console.error("错误: 当前环境无法使用终端二维码且未指定 --show / --save-qr-png，无法继续登录。");
     return 2;
   }
 
@@ -198,15 +198,24 @@ export async function runDouyinCliLogin({
 
       const paintOpts = { partitionLabel: part, saveQrPngPath };
 
-      if (useTerminalQr) {
-        console.log(
-          "正在加载抖音登录页，随后在终端刷新黑白方块扫码图（每 " +
-            CLI_LOGIN_QR_REFRESH_MS / 1000 +
-            "s，Electron CDP）… partition:",
-          part
-        );
+      if (useTerminalQr || saveQrPngPath) {
+        if (useTerminalQr) {
+          console.log(
+            "正在加载抖音登录页，随后在终端刷新黑白方块扫码图（每 " +
+              CLI_LOGIN_QR_REFRESH_MS / 1000 +
+              "s，Electron CDP）… partition:",
+            part
+          );
+        } else {
+          console.log(
+            "正在加载抖音登录页，周期截取二维码写入 PNG（每 " +
+              CLI_LOGIN_QR_REFRESH_MS / 1000 +
+              "s，Electron CDP）… partition:",
+            part
+          );
+        }
         if (saveQrPngPath) {
-          console.log("同时将截取区域写入 PNG:", saveQrPngPath);
+          console.log("二维码 PNG 写入路径:", saveQrPngPath);
         }
         qrTimer = setInterval(() => {
           if (settled || !piePage) return;

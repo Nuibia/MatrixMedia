@@ -235,7 +235,7 @@ export async function getDouyinLoginCaptureRectFromPuppeteerPage(page) {
  * @param {{ partitionLabel: string, saveQrPngPath?: string | null }} opts
  */
 export async function paintLoginQrToTerminalFromPuppeteerPage(page, opts) {
-  if (!process.stdout.isTTY) {
+  if (!process.stdout.isTTY && !opts.saveQrPngPath) {
     return;
   }
   try {

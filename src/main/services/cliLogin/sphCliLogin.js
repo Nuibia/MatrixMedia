@@ -31,16 +31,18 @@ import {
 const puppeteer = addExtra(puppeteerCore);
 puppeteer.use(StealthPlugin());
 
-function cliQrDebugLog(...args) {
+function cliQrDebugEnabled() {
   const v = process.env.MATRIX_CLI_QR_DEBUG;
-  if (
+  return !(
     v === undefined ||
     v === null ||
     String(v).trim() === "" ||
     String(v).trim() === "0"
-  ) {
-    return;
-  }
+  );
+}
+
+function cliQrDebugLog(...args) {
+  if (!cliQrDebugEnabled()) return;
   console.error("[MatrixMedia][cli-qr][sph]", ...args);
 }
 
@@ -96,8 +98,9 @@ async function captureQrFromIframe(page) {
     const frameUrl = frame.url();
     cliQrDebugLog("--- 检查", isMain ? "主 frame:" : "子 frame:", frameUrl);
 
-    // dump body 帮助调试（加深到 8 层）
-    try {
+    // dump body 帮助调试（加深到 8 层）；仅 debug 开启时执行，
+    // 避免每轮刷新都在重页面上 walk 整棵 DOM
+    if (cliQrDebugEnabled()) try {
       const bodySnippet = await frame.evaluate(() => {
         if (!document.body) return "(no body)";
         const imgs = Array.from(document.querySelectorAll("img")).map(
@@ -154,64 +157,80 @@ async function captureQrFromIframe(page) {
       continue;
     }
 
-    // 逐个尝试选择器
+    // 逐个尝试选择器；同一选择器遍历所有匹配，跳过隐藏的 0x0 节点
+    //（微信 qrconnect iframe 里同一张二维码有多个 img，前几个是隐藏的样式副本）
     for (const sel of QR_SELECTORS_IN_IFRAME) {
+      let handles;
       try {
-        const handle = await frame.$(sel);
-        if (!handle) continue;
-
-        const info = await frame.evaluate((el) => {
-          return {
-            tag: el.tagName,
-            cls: el.className || "",
-            src: el.src ? String(el.src).slice(0, 120) : null,
-            w: el.offsetWidth,
-            h: el.offsetHeight,
-          };
-        }, handle);
-        cliQrDebugLog("选择器命中:", sel, "=>", JSON.stringify(info));
-
-        // 跳过 SVG sprite / logo 等无意义元素
-        if (info.tag === "IMG" && (!info.src || info.w < 10 || info.h < 10))
-          continue;
-        // 跳过明显不是 QR 的图片（logo 等非正方形大图）
-        if (
-          info.tag === "IMG" &&
-          sel === "img" &&
-          info.cls &&
-          !info.cls.match(/qr/i) &&
-          Math.abs(info.w - info.h) > 50
-        )
-          continue;
-
-        // data: URL 直接解码
-        if (info.src && info.src.startsWith("data:")) {
-          const fullSrc = await frame.evaluate((el) => el.src, handle);
-          const comma = fullSrc.indexOf(",");
-          if (comma > 0) {
-            const b64 = fullSrc.slice(comma + 1);
-            const buf = Buffer.from(b64, "base64");
-            if (buf.length > 32) {
-              cliQrDebugLog("从 data: URL 解码成功，字节:", buf.length);
-              return { buf, fromDataUrl: true };
-            }
-          }
-        }
-
-        // http(s) URL 的 img 且尺寸合理 —— 用 elementHandle.screenshot
-        if (info.w > 30 && info.h > 30) {
-          try {
-            const buf = await handle.screenshot({ type: "png" });
-            if (buf && buf.length > 32) {
-              cliQrDebugLog("elementHandle.screenshot 成功，字节:", buf.length);
-              return { buf, fromDataUrl: false };
-            }
-          } catch (e) {
-            cliQrDebugLog("elementHandle.screenshot 失败:", e && e.message);
-          }
-        }
+        handles = await frame.$$(sel);
       } catch (e) {
-        cliQrDebugLog("选择器", sel, "在 frame 中失败:", e && e.message);
+        cliQrDebugLog("选择器", sel, "查询失败:", e && e.message);
+        continue;
+      }
+      if (!handles || !handles.length) continue;
+
+      for (const handle of handles) {
+        try {
+          const info = await frame.evaluate((el) => {
+            return {
+              tag: el.tagName,
+              cls: el.className || "",
+              src: el.src ? String(el.src).slice(0, 120) : null,
+              w: el.offsetWidth,
+              h: el.offsetHeight,
+            };
+          }, handle);
+          cliQrDebugLog("选择器命中:", sel, "=>", JSON.stringify(info));
+
+          // 跳过 SVG sprite / logo 等无意义元素（含 0x0 隐藏节点）
+          if (info.tag === "IMG" && (!info.src || info.w < 10 || info.h < 10))
+            continue;
+          // 跳过明显不是 QR 的图片（logo 等非正方形大图）
+          if (
+            info.tag === "IMG" &&
+            sel === "img" &&
+            info.cls &&
+            !info.cls.match(/qr/i) &&
+            Math.abs(info.w - info.h) > 50
+          )
+            continue;
+
+          // data: URL 直接解码
+          if (info.src && info.src.startsWith("data:")) {
+            const fullSrc = await frame.evaluate((el) => el.src, handle);
+            const comma = fullSrc.indexOf(",");
+            if (comma > 0) {
+              const b64 = fullSrc.slice(comma + 1);
+              const buf = Buffer.from(b64, "base64");
+              if (buf.length > 32) {
+                cliQrDebugLog("从 data: URL 解码成功，字节:", buf.length);
+                return { buf, fromDataUrl: true };
+              }
+            }
+          }
+
+          // http(s) URL 的 img 且尺寸合理 —— 用 elementHandle.screenshot
+          if (info.w > 30 && info.h > 30) {
+            try {
+              const buf = await handle.screenshot({ type: "png" });
+              if (buf && buf.length > 32) {
+                cliQrDebugLog(
+                  "elementHandle.screenshot 成功，字节:",
+                  buf.length
+                );
+                return { buf, fromDataUrl: false };
+              }
+            } catch (e) {
+              cliQrDebugLog("elementHandle.screenshot 失败:", e && e.message);
+            }
+          }
+        } catch (e) {
+          cliQrDebugLog("选择器", sel, "在 frame 中失败:", e && e.message);
+        } finally {
+          try {
+            await handle.dispose();
+          } catch (_) {}
+        }
       }
     }
   }
@@ -279,7 +298,8 @@ async function writeSphLoginQrToStdout(image, opts) {
  * 从 iframe 截取二维码并输出到终端 / 保存 PNG
  */
 async function paintSphLoginQr(page, opts) {
-  if (!process.stdout.isTTY && !opts.saveQrPngPath) return;
+  const canStdout = Boolean(opts.terminalQr && process.stdout.isTTY);
+  if (!canStdout && !opts.saveQrPngPath) return;
 
   const captured = await captureQrFromIframe(page);
   if (!captured || !captured.buf || !captured.buf.length) return;
@@ -304,7 +324,7 @@ async function paintSphLoginQr(page, opts) {
     }
   }
 
-  if (process.stdout.isTTY) {
+  if (canStdout) {
     await writeSphLoginQrToStdout(image, {
       partitionLabel: opts.partitionLabel,
       srcHint: "（iframe 截图）",
@@ -366,9 +386,9 @@ export async function runSphCliLogin({
       "提示: stdout 非 TTY，无法绘制终端二维码方块图。可改用 --save-qr-png，或在有显示环境用 xvfb-run 等。"
     );
   }
-  if (!useTerminalQr && !show) {
+  if (!useTerminalQr && !show && !saveQrPngPath) {
     console.error(
-      "错误: 当前环境无法使用终端二维码且未指定 --show，无法继续登录。"
+      "错误: 当前环境无法使用终端二维码且未指定 --show / --save-qr-png，无法继续登录。"
     );
     return 2;
   }
@@ -441,14 +461,18 @@ export async function runSphCliLogin({
         return;
       }
 
-      // 窗口配置与 GUI open-account-login-window 完全一致
-      // 唯一区别：非 --show 时 opacity=0，窗口不可见但 Chromium 正常渲染
+      // 窗口配置与 GUI open-account-login-window 基本一致
+      // 非 --show 时 opacity=0，窗口不可见但 Chromium 正常渲染；
+      // 同时 skipTaskbar + focusable:false + 鼠标事件穿透，
+      // 避免隐形窗口占据 Cmd+Tab / 吞掉屏幕上的鼠标点击（表现为"电脑卡死"）
       win = new BrowserWindow({
         width: 1200,
         height: 800,
         opacity: show ? 1 : 0,
         title: `视频号登录 ${part}`,
         autoHideMenuBar: true,
+        skipTaskbar: !show,
+        focusable: Boolean(show),
         webPreferences: {
           partition: part,
           nodeIntegration: false,
@@ -457,6 +481,12 @@ export async function runSphCliLogin({
           devTools: true,
         },
       });
+
+      if (!show) {
+        try {
+          win.setIgnoreMouseEvents(true);
+        } catch (_) {}
+      }
 
       win.on("closed", () => {
         if (!settled) {
@@ -512,17 +542,30 @@ export async function runSphCliLogin({
         win.focus();
       }
 
-      const paintOpts = { partitionLabel: part, saveQrPngPath };
+      const paintOpts = {
+        partitionLabel: part,
+        saveQrPngPath,
+        terminalQr: useTerminalQr,
+      };
 
-      if (useTerminalQr) {
-        console.log(
-          "正在加载视频号登录页，随后在终端刷新扫码图（每 " +
-            CLI_LOGIN_QR_REFRESH_MS / 1000 +
-            "s）… partition:",
-          part
-        );
+      if (useTerminalQr || saveQrPngPath) {
+        if (useTerminalQr) {
+          console.log(
+            "正在加载视频号登录页，随后在终端刷新扫码图（每 " +
+              CLI_LOGIN_QR_REFRESH_MS / 1000 +
+              "s）… partition:",
+            part
+          );
+        } else {
+          console.log(
+            "正在加载视频号登录页，周期截取二维码写入 PNG（每 " +
+              CLI_LOGIN_QR_REFRESH_MS / 1000 +
+              "s）… partition:",
+            part
+          );
+        }
         if (saveQrPngPath) {
-          console.log("同时将截取区域写入 PNG:", saveQrPngPath);
+          console.log("二维码 PNG 写入路径:", saveQrPngPath);
         }
         qrTimer = setInterval(() => {
           if (settled || !piePage) return;
