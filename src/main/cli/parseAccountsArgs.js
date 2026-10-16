@@ -38,6 +38,7 @@ export function parseAccountsArgs(subArgv) {
     platform: null,
     phone: null,
     json: false,
+    outFile: null,
     onlyLoggedIn: false,
     onlyLoggedOut: false,
   };
@@ -50,6 +51,11 @@ export function parseAccountsArgs(subArgv) {
       out.phone = args[++i];
     } else if (a === "--json") {
       out.json = true;
+    } else if (a === "--out") {
+      out.outFile = args[++i];
+      if (!out.outFile) {
+        return { ok: false, error: "--out 需要文件路径" };
+      }
     } else if (a === "--logged-in") {
       out.onlyLoggedIn = true;
     } else if (a === "--logged-out") {
@@ -88,6 +94,7 @@ export function accountsHelpText() {
       --logged-in       仅显示已登录账号
       --logged-out      仅显示未登录/已失效账号
       --json            以 JSON 输出（便于脚本消费）
+      --out <file>      配合 --json：JSON 写入文件而非 stdout（console 会混入启动日志行，无法直接解析）
   -h, --help            显示本帮助
 
 退出码: 0 正常输出, 1 异常, 2 参数错误

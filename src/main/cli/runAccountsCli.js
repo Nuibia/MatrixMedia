@@ -6,10 +6,17 @@ import { app, session } from "electron";
 import ptConfig from "../config/ptConfig";
 import { evaluateLoginCookies } from "../../shared/loginState.js";
 import { probeSphSession } from "../services/sphAuthProbe.js";
+import { getSphSessionId } from "../services/cliLogin/sphSessionUtil.js";
+import { recoverSphLoginBackup } from "../services/cliLogin/sphLoginBackup.js";
+import { replaceSphCookies } from "../services/sphCookieSession.js";
 
 function getAccountsDir() {
   const documents = app.getPath("documents");
   return path.join(documents, "MatrixMedia", "data", "account");
+}
+
+function sphLoginBackupDir() {
+  return path.join(app.getPath("userData"), "sph-login-backup");
 }
 
 function readAccounts() {
@@ -51,6 +58,29 @@ async function probeLogin(account) {
     // partition 用完整值：它本身不含 phone 的 `-` 后缀，再裁一次会打到
     // 空 session 上，导致 cookie 判定与探测分属两个会话
     const ses = session.fromPartition(partition);
+
+    // 视频号：上次 --force 登录若中途被杀，分区已被清空、磁盘上留有会话备份。
+    // 这里做一次保守恢复（仅当分区完全没有 sessionid 时才写入，绝不覆盖现存会话），
+    // 让状态查询能反映真实可用的登录态，而不是「登录成功过却显示无 cookie」。
+    if (account.pt === "视频号") {
+      try {
+        const message = await recoverSphLoginBackup({
+          dir: sphLoginBackupDir(),
+          partition,
+          getSessionId: () => getSphSessionId(partition),
+          probe: () => probeSphSession(partition),
+          restoreCookies: (cookies) => replaceSphCookies(ses, cookies),
+          onlyIfNoSession: true,
+        });
+        if (message) console.log(`[accounts] ${partition}: ${message}`);
+      } catch (e) {
+        console.warn(
+          `[accounts] ${partition} 恢复上次登录备份失败:`,
+          e && e.message
+        );
+      }
+    }
+
     const cookies = await ses.cookies.get({ url: probeUrl });
     // 与 GUI 侧 getCookie 共用同一套判定，避免两处规则漂移
     const verdict = evaluateLoginCookies(account.pt, cookies);
@@ -105,7 +135,13 @@ export async function runAccountsCli(options) {
   }
 
   if (options.json) {
-    console.log(JSON.stringify(rows, null, 2));
+    const json = JSON.stringify(rows, null, 2);
+    if (options.outFile) {
+      // 供 GUI 子进程读取：console 输出会混入 [startup] 等日志行，无法直接 JSON.parse
+      fs.writeFileSync(options.outFile, json, "utf-8");
+    } else {
+      console.log(json);
+    }
     return 0;
   }
 

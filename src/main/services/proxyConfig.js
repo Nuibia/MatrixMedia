@@ -87,7 +87,10 @@ export async function applyAccountProxyToSession({
   pt,
   proxyOverride,
 }) {
-  const partitionKey = String(partition || "").split("-")[0];
+  // partition 用完整值：标准 partition（persist:<账号"-"前缀><平台>）本身不含 "-"，
+  // 历史上这里再 split("-")[0] 会把非常规 partition 截到错误的 session 上，
+  // 代理配置与登录/发布落在两个会话
+  const partitionKey = String(partition || "");
   if (!partitionKey) {
     return { applied: false, mode: "direct", error: "partition 无效" };
   }

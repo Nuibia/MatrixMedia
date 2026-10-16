@@ -34,6 +34,8 @@
     "test:telemetry-preference": "node scripts/test-telemetry-preference.js",
     "test:telemetry-preference-ipc": "node scripts/test-telemetry-preference-ipc.js",
     "test:main-process-log-file": "node scripts/test-main-process-log-file.js",
+    "test:account-partition": "node scripts/test-account-partition.js",
+    "test:sph-login-backup": "node scripts/test-sph-login-backup.js",
     "test:cli-login": "node scripts/test-cli-login.js",
     "test:sph-chrome-login": "node scripts/test-sph-chrome-login.js",
     "test:sph-cookie-session": "node scripts/test-sph-cookie-session.js",

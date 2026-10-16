@@ -18,6 +18,7 @@ import {
 import { resolveChromePath } from "./chromeConfig.js";
 import xhsChromeHandler from "./upLoad/xhsChrome.js";
 import { isPlatformLoginUrl } from "../../shared/platformPageState.js";
+import { canonicalAccountPartition } from "../../shared/accountPartition.js";
 import { normalizeVideoMetadata } from "../../shared/videoMetadata.js";
 import { capturePublishFailureScreenshot } from "./upLoad/failureScreenshot.js";
 
@@ -245,7 +246,13 @@ export function normalizePuppeteerVideoTaskData(data) {
 async function doUpload(data, transport, queueDone, runtimeTask) {
   data = applyXhsConservativePublishOptions(data);
   normalizePuppeteerVideoTaskData(data);
-  data.partition = data.partition.split("-")[0];
+  // partition 规整为标准形态而非简单 split("-")[0]：旧写法会把平台后缀一起截掉
+  // （persist:测试-2视频号 → persist:测试），发布落到没有登录态的空分区。
+  // pt 可能带「状态」后缀（登录态巡检任务），规整前先去掉。
+  data.partition = canonicalAccountPartition(
+    data.partition,
+    String(data.pt || "").replace(/状态$/, "")
+  );
   const isXhsTask = isXhsPlatform(data.pt);
   const maxRetries = getPublishAttemptLimit(data, 5);
   let currentAttempt = 0;

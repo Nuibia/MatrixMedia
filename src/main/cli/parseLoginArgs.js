@@ -165,7 +165,9 @@ export function loginHelpText() {
       --save-qr-png <p>   每次刷新写 PNG（优先 #animate_qrcode_container 内 data: 原图）
       --puppeteer-headless  使用 Puppeteer 无头 Chromium（仅抖音，视频号不支持）
       --timeout-sec <n>   最长等待秒数，默认 900（15 分钟）
-      --force            视频号：即使当前会话仍有效也强制重新扫码（换号时使用；失败会自动恢复原会话）
+      --force            视频号：即使当前会话仍有效也强制重新扫码（换号时使用）。
+                      清除前会把原会话备份到磁盘：超时/关窗/中断立即恢复；
+                      进程被强杀时下次登录或账号查询自动恢复。
   -h, --help            显示本帮助
 
 调试: MATRIX_CLI_QR_DEBUG=1 向 stderr 输出 [MatrixMedia][cli-qr] 日志（约每 6s 一次页面诊断）。

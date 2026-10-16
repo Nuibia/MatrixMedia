@@ -105,11 +105,12 @@ node scripts/test-<name>.js
 
 ## Agent 修改代码时的「坑」
 
-1. **GUI 与 CLI 共享 session partition**（`persist:<phone><平台>`），改登录相关代码时不要破坏这个约定，否则 CLI 与 GUI 会互踢。
-2. **Puppeteer 注入的 JS 会被打包压缩**，避免在生产代码里依赖闭包变量名；参考 `fix(bjh)` 提交记录里的「三连击 + Ctrl/Cmd+A + Backspace」模式。
-3. **argv 判断逻辑**在 `src/main/cli/detectArgv.js`，新增 CLI 子命令要同步新增 `parse<Xxx>Args.js` 并更新 `docs/cli.md`。
-4. **不要直接改 `dist/`**：那是构建产物。
-5. **`telemetrySecret.generated.js` 由 `scripts/gen-telemetry-secret.js` 生成**，已在 `.gitignore`，不要提交。
+1. **GUI 与 CLI 共享 session partition**（`persist:<账号名"-"前缀><平台>`），改登录相关代码时不要破坏这个约定，否则 CLI 与 GUI 会互踢。所有拼装必须走 `src/shared/accountPartition.js` 的 `buildAccountPartition`；对来源不明的 partition 做「归一」时用同文件的 `canonicalAccountPartition`（保留平台后缀），**禁止**再手写 `split("-")[0]`（历史 bug：连平台后缀一起截掉，登录 A 分区、发布读 B 分区）。
+2. **视频号 `--force` 登录清 Cookie 前会把会话快照写到 `<userData>/sph-login-backup/`**；登录成功 / 正常恢复后删除，进程被强杀时由下次 sph 登录（`sphCliLogin`）或账号查询（`runAccountsCli`，仅分区完全无 sessionid 时）自动恢复。改这段逻辑时必须保持「先备份落盘、再清除」的顺序，备份写失败时不得清除 Cookie。
+3. **Puppeteer 注入的 JS 会被打包压缩**，避免在生产代码里依赖闭包变量名；参考 `fix(bjh)` 提交记录里的「三连击 + Ctrl/Cmd+A + Backspace」模式。
+4. **argv 判断逻辑**在 `src/main/cli/detectArgv.js`，新增 CLI 子命令要同步新增 `parse<Xxx>Args.js` 并更新 `docs/cli.md`。
+5. **不要直接改 `dist/`**：那是构建产物。
+6. **`telemetrySecret.generated.js` 由 `scripts/gen-telemetry-secret.js` 生成**，已在 `.gitignore`，不要提交。
 
 ## 测试 / 验证流程
 

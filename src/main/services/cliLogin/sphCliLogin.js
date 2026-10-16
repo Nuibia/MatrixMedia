@@ -6,6 +6,7 @@ import puppeteerCore from "puppeteer-core";
 import { addExtra } from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import { nativeImage } from "electron";
+import path from "path";
 import ptConfig from "../../config/ptConfig";
 import {
   clearTerminalScreen,
@@ -25,6 +26,11 @@ import {
 import { prepareSphAccountLoginSession } from "../sphLoginSession.js";
 import { probeSphSession } from "../sphAuthProbe.js";
 import { isSphCookie, replaceSphCookies } from "../sphCookieSession.js";
+import {
+  clearSphLoginBackup,
+  recoverSphLoginBackup,
+  saveSphLoginBackup,
+} from "./sphLoginBackup.js";
 import {
   CLI_LOGIN_QR_FIRST_DELAY_MS,
   CLI_LOGIN_QR_REFRESH_MS,
@@ -50,6 +56,11 @@ function cliQrDebugLog(...args) {
 
 function stripAnsi(s) {
   return String(s).replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+/** --force 清 Cookie 前的磁盘快照目录：<userData>/sph-login-backup */
+function sphLoginBackupDir() {
+  return path.join(app.getPath("userData"), "sph-login-backup");
 }
 
 /** 比较两组 sph Cookie 是否一致（domain|path|name|value 全等），用于判断登录过程是否改动了 jar */
@@ -393,6 +404,23 @@ export async function runSphCliLogin({
     return 1;
   }
 
+  // 上次 --force 登录若中途被杀（外部终止 / 崩溃 / 断电），磁盘上会残留会话备份，
+  // 分区处于被清空状态。这里先自动恢复，避免「登录成功过、账号却一直显示无 cookie」。
+  // 放在代理配置之后，鉴权探测才能走账号配置的网络路径。
+  try {
+    const message = await recoverSphLoginBackup({
+      dir: sphLoginBackupDir(),
+      partition: part,
+      getSessionId: () => getSphSessionId(part),
+      probe: () => probeSphSession(part),
+      restoreCookies: (cookies) =>
+        replaceSphCookies(electronSession.fromPartition(part), cookies),
+    });
+    if (message) console.log("[sph-cli-login]", message);
+  } catch (e) {
+    console.warn("[sph-cli-login] 恢复上次登录前的会话失败:", e && e.message);
+  }
+
   // 记住旧 sessionid，轮询时检测到不同值才算"新登录成功"
   if (prepared.changed && prepared.verified) {
     console.log("视频号冲突会话已整理并通过鉴权，可执行 cli publish。");
@@ -437,16 +465,33 @@ export async function runSphCliLogin({
   }
 
   // --force：会话仍有效时 /platform 不会展示登录页（没有二维码可扫），
-  // 先清除既有 sph Cookie 强制进入登录页；失败/超时退出由上面的快照自动恢复
+  // 先清除既有 sph Cookie 强制进入登录页。快照除内存外同时落盘：
+  // 进程中途被杀（外部终止 / 崩溃 / 断电，内存恢复不会执行）时，
+  // 由下次视频号登录或账号状态查询从磁盘自动恢复。
   if (force && oldSessionId) {
+    let backupSaved = false;
     try {
-      await replaceSphCookies(sphSes, []);
-      oldSessionId = null;
-      console.log(
-        "[sph-cli-login] --force：已清除既有 sph Cookie，强制重新扫码登录（失败会自动恢复）"
-      );
+      saveSphLoginBackup(sphLoginBackupDir(), part, cookieSnapshot);
+      backupSaved = true;
     } catch (e) {
-      console.warn("[sph-cli-login] --force 清除 Cookie 失败:", e && e.message);
+      console.warn("[sph-cli-login] 会话备份写入磁盘失败:", e && e.message);
+    }
+    if (!backupSaved) {
+      // 备份写不进去就不清 Cookie：宁可放弃这次强制重登，也不能把唯一会话弄丢
+      console.error(
+        "[sph-cli-login] 备份失败，已放弃 --force 清除（原会话保持不变），请检查磁盘权限后重试。"
+      );
+    } else {
+      try {
+        await replaceSphCookies(sphSes, []);
+        oldSessionId = null;
+        console.log(
+          "[sph-cli-login] --force：已备份并清除既有 sph Cookie，强制重新扫码登录（失败/中断会自动恢复）"
+        );
+      } catch (e) {
+        console.warn("[sph-cli-login] --force 清除 Cookie 失败:", e && e.message);
+        clearSphLoginBackup(sphLoginBackupDir(), part);
+      }
     }
   }
 
@@ -486,6 +531,10 @@ export async function runSphCliLogin({
       if (pollTimer) clearInterval(pollTimer);
       if (qrTimer) clearInterval(qrTimer);
       if (deadlineTimer) clearTimeout(deadlineTimer);
+      try {
+        process.removeListener("SIGINT", onSignal);
+        process.removeListener("SIGTERM", onSignal);
+      } catch (_) {}
 
       // 登录成功时，先将 Cookie / Storage 刷盘，再关窗口
       // 否则新 BrowserWindow 读同一 partition 时可能拿不到最新数据
@@ -495,8 +544,12 @@ export async function runSphCliLogin({
           await ses.cookies.flushStore();
           ses.flushStorageData();
         } catch (_) {}
+        // 新会话已确认，磁盘上的 --force 备份使命结束
+        try {
+          clearSphLoginBackup(sphLoginBackupDir(), part);
+        } catch (_) {}
       } else if (cookieSnapshot) {
-        // 未确认新登录的退出（超时/关窗/失败）：若扫码过程改动了 Cookie，
+        // 未确认新登录的退出（超时/关窗/失败/信号）：若扫码过程改动了 Cookie，
         // 恢复登录前快照，避免无效新会话覆盖该分区既有有效会话。
         // 必须在关窗前完成（窗口销毁后 cookies 写操作可能挂起），并加超时兜底
         try {
@@ -510,8 +563,14 @@ export async function runSphCliLogin({
             ]);
             console.log("未确认新的视频号登录，已恢复登录前的会话 Cookie。");
           }
+          // 内存恢复完成（或 Cookie 本就未变），磁盘备份一并清理
+          clearSphLoginBackup(sphLoginBackupDir(), part);
         } catch (e) {
-          console.warn("[sph-cli-login] 恢复登录前会话失败:", e && e.message);
+          // 内存恢复失败时保留磁盘备份：进程退出后下次登录/查询仍能自动恢复
+          console.warn(
+            "[sph-cli-login] 恢复登录前会话失败（磁盘备份已保留，下次将自动恢复）:",
+            e && e.message
+          );
         }
       }
 
@@ -538,6 +597,18 @@ export async function runSphCliLogin({
       }
       resolve(code);
     };
+
+    // 进程收到 SIGINT / SIGTERM（Ctrl+C、脚本 kill）时同样走 finish(3)：
+    // 先恢复快照、清理磁盘备份，再正常退出，而不是把清空状态留在分区里。
+    // Windows 下 taskkill /F、TerminateProcess 无法捕获，那类强杀由磁盘备份
+    // 在下次视频号登录 / 账号状态查询时兜底恢复。
+    const onSignal = () => {
+      finish(3, {
+        log: "收到中断信号，按未完成登录处理，已恢复/保留登录前会话。",
+      });
+    };
+    process.once("SIGINT", onSignal);
+    process.once("SIGTERM", onSignal);
 
     const winWidth = 1100;
     const winHeight = 820;
