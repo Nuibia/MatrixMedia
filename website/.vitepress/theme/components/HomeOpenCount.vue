@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted } from "vue";
-import { loadGistEvents, OPENS_FILE } from "../utils/gistStats";
+import { loadGistEvents, loadTotalOpens, OPENS_FILE } from "../utils/gistStats";
 
 const opensTotal = ref(null);
 const opens7d = ref(null);
@@ -21,13 +21,18 @@ function since7d(arr) {
 
 async function load() {
   loading.value = true;
-  const opensRes = await loadGistEvents(OPENS_FILE);
+  const [opensRes, totalRes] = await Promise.all([
+    loadGistEvents(OPENS_FILE),
+    loadTotalOpens(),
+  ]);
   const opens = opensRes.events;
-  if (!opens.length && opensRes.error) {
+  if (!opens.length && opensRes.error && totalRes.total == null) {
     error.value = true;
   } else {
     error.value = false;
-    opensTotal.value = opens.length;
+    // 优先用 meta.json 的真实累计总数；老数据没有 meta 时回退数组长度
+    opensTotal.value =
+      totalRes.total != null ? totalRes.total : opens.length;
     opens7d.value = since7d(opens);
   }
   loading.value = false;

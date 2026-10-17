@@ -24,10 +24,12 @@ MatrixMedia 在应用启动时会向一个公开 GitHub Gist 追加一条**匿�
 
 ## 上报流程
 
-1. 应用启动后在后台（不阻塞主流程）读取 Gist 当前 `events.json`。
-2. 追加本次事件。
-3. 若条数超过 5000，只保留最近 5000 条。
-4. 写回 Gist。
+1. 应用启动后在后台（不阻塞主流程）读取 Gist 当前内容（一次 GET 取整个 gist）。
+2. 向 `events.json` 追加本次事件；若条数超过 5000，只保留最近 5000 条（滚动窗口）。
+3. 向 `meta.json`（`{ "total": 累计总数, "updated": 更新时间 }`）的 `total` 加一；文件缺失或损坏时以当前事件条数兜底初始化。
+4. 一次 PATCH 同时写回 `events.json` 与 `meta.json`。
+
+官网"累计打开次数"读 `meta.json` 的 `total`（只增不减）；"近 N 天"与平台/版本分布读 `events.json` 的滚动窗口。
 
 整个过程是 **best-effort**：失败静默，绝不影响应用启动或使用。
 
@@ -41,7 +43,7 @@ MatrixMedia 在应用启动时会向一个公开 GitHub Gist 追加一条**匿�
 
 ## 自建后端（维护者）
 
-1. 创建一个**公开** Gist，文件名固定为 `events.json`，初始内容 `[]`。
+1. 创建一个**公开** Gist，包含两个文件：`events.json`（初始内容 `[]`）与 `meta.json`（初始内容 `{ "total": 0, "updated": "" }`，也可以不建，首次上报会自动初始化）。
 2. 记下 Gist id。
 3. 创建一个有 `gist` 权限的 GitHub Token。
 4. Electron 端配置（二选一）：

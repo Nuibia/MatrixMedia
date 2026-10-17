@@ -1,15 +1,19 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 
-import { loadGistEvents, GIST_ID, OPENS_FILE } from '../utils/gistStats'
+import { loadGistEvents, loadTotalOpens, GIST_ID, OPENS_FILE } from '../utils/gistStats'
 
 const loading = ref(false)
 const error = ref('')
 const events = ref([])
+const totalOpens = ref(null) // meta.json 里的真实累计总数
 const updatedAt = ref(null)
 const configOk = computed(() => !!GIST_ID)
 
-const total = computed(() => events.value.length)
+// 优先用 meta.json 的累计总数；老数据没有 meta 时回退数组长度（上限 5000）
+const total = computed(() =>
+  totalOpens.value != null ? totalOpens.value : events.value.length
+)
 const opens7d = computed(() => countSince(7))
 const opens30d = computed(() => countSince(30))
 const opens1d = computed(() => countSince(1))
@@ -31,7 +35,7 @@ function distBy(key) {
   }
   return Object.entries(m)
     .sort((a, b) => b[1] - a[1])
-    .map(([name, count]) => ({ name, count, pct: total.value ? Math.round((count / total.value) * 100) : 0 }))
+    .map(([name, count]) => ({ name, count, pct: events.value.length ? Math.round((count / events.value.length) * 100) : 0 }))
 }
 
 const recent = computed(() =>
@@ -53,7 +57,11 @@ async function fetchGist(force = false) {
   loading.value = true
   error.value = ''
   try {
-    const res = await loadGistEvents(OPENS_FILE, { force })
+    const [res, totalRes] = await Promise.all([
+      loadGistEvents(OPENS_FILE, { force }),
+      loadTotalOpens({ force })
+    ])
+    totalOpens.value = totalRes.total
     if (res.error && !res.events.length) {
       error.value = `数据加载失败：${res.error}`
     } else {

@@ -5,6 +5,8 @@
  *
  * 设计：
  * - 每次 Electron 启动（GUI / CLI）追加一条事件到公开 Gist 的 events.json
+ * - 累计总数写在 meta.json（{ total, updated }），只增不减；
+ *   events.json 只保留最近 MAX_EVENTS 条滚动窗口，供"近 N 天/分布"统计
  * - 不做去重、不固定设备 ID，只记录"打开"这一动作
  * - 写入需要 token：env MATRIXMEDIA_GIST_TOKEN / ~/.matrixmedia/gist-token / 内置常量
  * - 关闭：env MATRIXMEDIA_DISABLE_TELEMETRY=1 或 ~/.matrixmedia/no-telemetry
@@ -25,6 +27,9 @@ import {
 
 const GITHUB_API = "https://api.github.com";
 const GIST_FILENAME = "events.json";
+// 累计总数单独存 meta.json（{ total, updated }），单调递增，
+// 不受 events.json 只保留最近 MAX_EVENTS 条的滚动裁剪影响
+const META_FILENAME = "meta.json";
 const MAX_EVENTS = 5000; // 最多保留最近 5000 条，避免无限增长
 const TOKEN_FILE = "gist-token";
 const CONFIG_DIR = ".matrixmedia";
@@ -127,7 +132,7 @@ function githubHeaders(token, extra = {}) {
   );
 }
 
-async function fetchGist(gistId, token, filename) {
+async function fetchGist(gistId, token) {
   const opts = {
     method: "GET",
     hostname: "api.github.com",
@@ -139,15 +144,17 @@ async function fetchGist(gistId, token, filename) {
   if (res.status < 200 || res.status >= 300) {
     throw new Error(`github gist get failed: ${res.status}`);
   }
-  const data = JSON.parse(res.body || "{}");
-  const file = data.files && data.files[filename];
-  const content = file && file.content ? file.content : "[]";
-  return content;
+  return JSON.parse(res.body || "{}");
 }
 
-async function updateGist(gistId, token, filename, content) {
+function gistFileContent(gist, filename) {
+  const file = gist && gist.files && gist.files[filename];
+  return file && typeof file.content === "string" ? file.content : "";
+}
+
+async function updateGist(gistId, token, files) {
   const body = JSON.stringify({
-    files: { [filename]: { content } },
+    files,
   });
   const opts = {
     method: "PATCH",
@@ -176,6 +183,19 @@ function appendEvent(prevArr, event) {
 }
 
 /**
+ * 计算下一次的累计总数。
+ * meta.json 里已有合法 total 就 +1；文件缺失/损坏（老版本没写过、被裁坏）时
+ * 用当前事件数组长度兜底初始化，保证从今往后单调递增。
+ */
+function nextTotal(metaContent, fallback) {
+  try {
+    const meta = JSON.parse(metaContent || "null");
+    if (meta && Number.isFinite(meta.total)) return meta.total + 1;
+  } catch (_) {}
+  return fallback;
+}
+
+/**
  * 上报一次"打开"事件。best-effort，失败静默。
  * @param {Electron.App} app
  * @param {"gui"|"cli"} mode
@@ -187,20 +207,25 @@ export async function reportUsageTelemetry(app, mode = "gui") {
     const token = getGistToken();
     if (!gistId || !token) return false; // 未配置，跳过
     const event = collectEvent(mode);
-    const content = await fetchGist(gistId, token, GIST_FILENAME);
+    const gist = (await fetchGist(gistId, token)) || {};
     let prev = [];
     try {
-      prev = content ? JSON.parse(content) : [];
+      const parsed = JSON.parse(gistFileContent(gist, GIST_FILENAME) || "[]");
+      if (Array.isArray(parsed)) prev = parsed;
     } catch (_) {
       prev = [];
     }
     const next = appendEvent(prev, event);
-    await updateGist(
-      gistId,
-      token,
-      GIST_FILENAME,
-      JSON.stringify(next, null, 2)
-    );
+    const total = nextTotal(gistFileContent(gist, META_FILENAME), next.length);
+    // 一次 GET、一次 PATCH 同时更新明细和累计总数
+    await updateGist(gistId, token, {
+      [GIST_FILENAME]: JSON.stringify(next, null, 2),
+      [META_FILENAME]: JSON.stringify(
+        { total, updated: event.ts },
+        null,
+        2
+      ),
+    });
     return true;
   } catch (err) {
     try {

@@ -15,6 +15,9 @@ export const GIST_OWNER = "hanliang97";
 export const GIST_ID = "9bd67e622baa655abf30cc151f0fcf5a";
 export const OPENS_FILE = "events.json";
 export const REQ_FILE = "requirements.json";
+// 累计打开总数（{ total, updated }），由 Electron 端上报时 +1，
+// 不受 events.json 只保留最近 5000 条的影响
+export const META_FILE = "meta.json";
 
 const RAW_BASE = `https://gist.githubusercontent.com/${GIST_OWNER}/${GIST_ID}/raw`;
 const API_URL = `https://api.github.com/gists/${GIST_ID}`;
@@ -32,7 +35,7 @@ function readCache(file) {
     const raw = localStorage.getItem(cacheKey(file));
     if (!raw) return null;
     const obj = JSON.parse(raw);
-    if (!obj || !obj.t || !Array.isArray(obj.data)) return null;
+    if (!obj || !obj.t || obj.data == null) return null;
     return { data: obj.data, t: obj.t, fresh: Date.now() - obj.t <= CACHE_TTL };
   } catch (_) {
     return null;
@@ -48,19 +51,19 @@ function writeCache(file, data) {
   } catch (_) {}
 }
 
-function parseArray(text) {
+function parseJson(text) {
   try {
-    const arr = JSON.parse(text || "[]");
-    return Array.isArray(arr) ? arr : [];
+    const v = JSON.parse(text || "null");
+    return v === null ? null : v;
   } catch (_) {
-    return [];
+    return null;
   }
 }
 
 async function fetchRaw(file) {
   const res = await fetch(`${RAW_BASE}/${file}`);
   if (!res.ok) throw new Error(`raw ${res.status}`);
-  return parseArray(await res.text());
+  return parseJson(await res.text());
 }
 
 async function fetchApi(file) {
@@ -70,20 +73,21 @@ async function fetchApi(file) {
   if (!res.ok) throw new Error(`api ${res.status}`);
   const data = await res.json();
   const f = data.files && data.files[file];
-  return parseArray((f && f.content) || "[]");
+  return f && f.content ? parseJson(f.content) : null;
 }
 
 /**
- * 读取 gist 中某个事件文件。
- * @param {string} file 文件名，如 events.json
+ * 读取 gist 中的任意 JSON 文件（数组或对象均可）。
+ * @param {string} file 文件名，如 events.json / meta.json
  * @param {{force?: boolean}} [opts] force=true 时跳过新鲜缓存强制刷新
- * @returns {Promise<{events: any[], updatedAt: string, stale: boolean, error: string}>}
+ * @returns {Promise<{data: any, updatedAt: string, stale: boolean, error: string}>}
+ *   data 为解析后的 JSON；文件不存在或解析失败时为 null（error 为空表示"文件确实不存在"）
  */
-export async function loadGistEvents(file, opts = {}) {
+export async function loadGistFile(file, opts = {}) {
   const cached = readCache(file);
   if (!opts.force && cached && cached.fresh) {
     return {
-      events: cached.data,
+      data: cached.data,
       updatedAt: new Date(cached.t).toISOString(),
       stale: false,
       error: "",
@@ -97,10 +101,10 @@ export async function loadGistEvents(file, opts = {}) {
     let lastErr = "";
     for (const fn of [fetchRaw, fetchApi]) {
       try {
-        const events = await fn(file);
-        writeCache(file, events);
+        const data = await fn(file);
+        if (data !== null) writeCache(file, data);
         return {
-          events,
+          data,
           updatedAt: new Date().toISOString(),
           stale: false,
           error: "",
@@ -112,14 +116,14 @@ export async function loadGistEvents(file, opts = {}) {
     // 全部失败：用过期缓存兜底，保证页面不空白
     if (cached) {
       return {
-        events: cached.data,
+        data: cached.data,
         updatedAt: new Date(cached.t).toISOString(),
         stale: true,
         error: lastErr,
       };
     }
     return {
-      events: [],
+      data: null,
       updatedAt: null,
       stale: false,
       error: lastErr || "加载失败",
@@ -132,6 +136,44 @@ export async function loadGistEvents(file, opts = {}) {
   } finally {
     inflight.delete(key);
   }
+}
+
+/**
+ * 读取 gist 中某个事件文件。
+ * @param {string} file 文件名，如 events.json
+ * @param {{force?: boolean}} [opts] force=true 时跳过新鲜缓存强制刷新
+ * @returns {Promise<{events: any[], updatedAt: string, stale: boolean, error: string}>}
+ */
+export async function loadGistEvents(file, opts = {}) {
+  const res = await loadGistFile(file, opts);
+  const events = Array.isArray(res.data) ? res.data : [];
+  return {
+    events,
+    updatedAt: res.updatedAt,
+    stale: res.stale,
+    error: res.error,
+  };
+}
+
+/**
+ * 读取累计打开总数（meta.json 的 total 字段）。
+ * 老数据没有 meta.json 或字段缺失时返回 total: null，调用方回退用事件数组长度。
+ * @param {{force?: boolean}} [opts]
+ * @returns {Promise<{total: number|null, updatedAt: string, stale: boolean, error: string}>}
+ */
+export async function loadTotalOpens(opts = {}) {
+  const res = await loadGistFile(META_FILE, opts);
+  const d = res.data;
+  const total =
+    d && typeof d === "object" && !Array.isArray(d) && Number.isFinite(d.total)
+      ? d.total
+      : null;
+  return {
+    total,
+    updatedAt: res.updatedAt,
+    stale: res.stale,
+    error: total === null ? res.error || "" : "",
+  };
 }
 
 /**

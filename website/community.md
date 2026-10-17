@@ -10,13 +10,14 @@ description: 矩媒 MatrixMedia 匿名打开次数统计看板（基于 GitHub G
   <a href="/feature-wall" class="community-tab">需求墙</a>
 </div>
 
-本页展示所有打开过 MatrixMedia Electron 应用的**匿名**统计数据。数据通过 GitHub API 从一个公开 Gist 读取，每次应用启动（GUI / CLI）会追加一条事件，**不做去重**，仅记录"打开"这一动作。
+本页展示所有打开过 MatrixMedia Electron 应用的**匿名**统计数据。数据通过 GitHub API 从一个公开 Gist 读取，每次应用启动（GUI / CLI）会追加一条事件，**不做去重**，仅记录"打开"这一动作。**累计打开次数**为只增不减的真实总数；明细事件为滚动窗口，只保留最近 5000 条，用于计算"近 N 天"与各项分布。
 
 <ActiveUsersBoard />
 
 ## 数据说明
 
 - 每条事件仅包含：时间、应用版本、操作系统平台、CPU 架构、界面语言、启动方式（GUI / CLI）。
+- 累计总数存于 gist 的 `meta.json`（`{ total, updated }`），明细存于 `events.json`（最多保留最近 5000 条）。
 - **不采集**任何可识别个人信息：无用户 ID、无设备指纹、无账号、无 IP、无地理位置。
 - 数据存储在一个公开 GitHub Gist 中，任何人都可以查看原始数据。
 
