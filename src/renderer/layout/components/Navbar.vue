@@ -72,6 +72,9 @@
           <div class="tips-content">
             新增账号后，建议先到对应平台上传页走一遍流程并取消上传，部分平台会有新手引导需要手动关闭。
           </div>
+          <div v-if="isXhsPlatform" class="tips-content tips-danger">
+            小红书风控严格，请谨慎使用小红书自动发布，容易封号。只是管理账号、手动发布暂未发现异常。
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -109,6 +112,10 @@ export default {
   computed: {
     mediaMenuItemIndex() {
       return this.getAccoutIndex || MEDIA_MENU_NO_ACCOUNT;
+    },
+    // 是否选中了小红书平台
+    isXhsPlatform() {
+      return String(this.pushData.pt || "").trim() === "小红书";
     },
     // 当前分组已占用的平台，避免同一分组重复添加
     usedPtsForGroup() {
@@ -344,6 +351,16 @@ export default {
   padding: 10px 12px;
   background-color: #f4f4f5;
   border-radius: 4px;
+
+  & + .tips-content {
+    margin-top: 8px;
+  }
+}
+
+// 小红书风控警告，红色显示
+.tips-danger {
+  color: #f56c6c;
+  background-color: #fef0f0;
 }
 
 // 平台下拉选项内容铺满整行，保证禁用项整行悬停都能触发 tooltip
