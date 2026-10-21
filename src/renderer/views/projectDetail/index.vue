@@ -19,6 +19,16 @@
         @click="activeTab = 'dev'"
         >🚀 快速开发新平台</el-button
       >
+      <el-button
+        :type="activeTab === 'ai' ? 'success' : 'info'"
+        @click="activeTab = 'ai'"
+        >🤖 AI 设置</el-button
+      >
+    </div>
+
+    <!-- Tab: AI 设置（API Key 管理，供发布页 AI 生成标题/正文/标签使用） -->
+    <div v-if="activeTab === 'ai'">
+      <ai-settings-card />
     </div>
 
     <!-- Tab: 项目文档 -->
@@ -339,9 +349,11 @@ export default {
 import packageInfo from "../../../../package.json";
 import { ipcRenderer } from "electron";
 import { VIDEO_PUBLISH_PLATFORM_DOCS } from "../../../shared/publishPlatforms.js";
+import AiSettingsCard from "@/components/ai/AiSettingsCard.vue";
 
 export default {
   name: "ProjectDetail",
+  components: { AiSettingsCard },
   data() {
     const videoPlatforms = VIDEO_PUBLISH_PLATFORM_DOCS.map((item) => ({
       code: item.code,
@@ -352,7 +364,9 @@ export default {
     return {
       appVersion: packageInfo.version,
       httpPort: 30088,
-      activeTab: "docs",
+      activeTab: ["docs", "dev", "ai"].includes(this.$route && this.$route.query.tab)
+        ? this.$route.query.tab
+        : "docs",
       telemetryEnabled: false,
       telemetryEnforced: false,
       telemetryBusy: false,

@@ -63,6 +63,10 @@
     "test:bilibili-stats": "node scripts/test-bilibili-stats.js",
     "test:bjh-stats": "node scripts/test-bjh-stats.js",
     "test:data-stats": "node scripts/test-data-stats.js",
+    "test:ai-content": "node scripts/test-ai-content.js",
+    "test:ai-key-store": "node scripts/test-ai-key-store.js",
+    "test:ai-content-ipc": "node scripts/test-ai-content-ipc.js",
+    "ai:mock-server": "node scripts/ai-mock-server.js",
     "import-capture": "node scripts/import-ps-capture.js"
   },
   "build": {
