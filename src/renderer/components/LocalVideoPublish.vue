@@ -20,6 +20,7 @@
           <div class="ai-field-row">
             <el-input v-model="form.bt1" placeholder="发布时使用的标题" />
             <ai-generate-button
+              :active="metaVisible"
               kind="title"
               :get-context="getAiContext"
               @generated="onAiTitle"
@@ -37,6 +38,7 @@
               placeholder="选填，将作为各平台正文或简介"
             />
             <ai-generate-button
+              :active="metaVisible"
               kind="body"
               :get-context="getAiContext"
               @generated="onAiBody"
@@ -61,6 +63,7 @@
               @keydown.native.capture="onBqKeydown"
             ></el-select>
             <ai-generate-button
+              :active="metaVisible"
               kind="tags"
               :get-context="getAiContext"
               @generated="onAiTags"

@@ -13,6 +13,7 @@
           <div class="ai-field-row">
             <el-input v-model="form.title" placeholder="请输入文章标题" />
             <ai-generate-button
+              :active="metaVisible"
               kind="title"
               :get-context="getAiContext"
               @generated="onAiTitle"
@@ -28,6 +29,7 @@
               placeholder="请输入正文，或选择 .md/.txt 文章文件"
             />
             <ai-generate-button
+              :active="metaVisible"
               kind="body"
               :get-context="getAiContext"
               @generated="onAiBody"
@@ -64,6 +66,7 @@
               style="width: 100%"
             ></el-select>
             <ai-generate-button
+              :active="metaVisible"
               kind="tags"
               :get-context="getAiContext"
               @generated="onAiTags"

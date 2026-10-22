@@ -85,6 +85,42 @@ async function main() {
   assert.strictEqual(last.body.model, "mock-model");
   assert.ok(last.body.messages[1].content.includes("周末爬山vlog"));
 
+  // 指定 providerId：第二个配置（非默认）生成时用它的模型；不存在的 id 明确报错
+  res = await callLogged("ai:save-provider", { name: "Mock2", preset: "custom", baseURL, model: "mock-model-2", apiKey: VALID_KEY });
+  assert.strictEqual(res.ok, true);
+  const id2 = res.provider.id;
+  assert.strictEqual(res.provider.isDefault, false);
+  res = await callLogged("ai:generate", { kind: "title", context: ctx, providerId: id2 });
+  assert.strictEqual(res.ok, true, res.message);
+  assert.strictEqual(res.model, "mock-model-2");
+  assert.strictEqual(res.providerId, id2);
+  assert.strictEqual(server.requests[server.requests.length - 1].body.model, "mock-model-2");
+  res = await callLogged("ai:generate", { kind: "title", context: ctx });
+  assert.strictEqual(res.model, "mock-model", "不传 providerId 时用默认配置");
+  res = await callLogged("ai:generate", { kind: "title", context: ctx, providerId: "no-such-id" });
+  assert.strictEqual(res.ok, false);
+  assert.ok(/不存在/.test(res.message));
+  await callLogged("ai:delete-provider", id2);
+
+  // 取消：慢请求进行中调用 ai:cancel-generate，生成立即以 canceled 结束
+  server.delayMs = 5000;
+  const started = Date.now();
+  const pendingGen = callLogged("ai:generate", { kind: "title", context: ctx, requestId: "req-1" });
+  await new Promise((r) => setTimeout(r, 100));
+  const cancelRes = await callLogged("ai:cancel-generate", "req-1");
+  assert.strictEqual(cancelRes.ok, true);
+  assert.strictEqual(cancelRes.canceled, true);
+  res = await pendingGen;
+  assert.strictEqual(res.ok, false);
+  assert.strictEqual(res.canceled, true);
+  assert.ok(/已取消/.test(res.message));
+  assert.ok(Date.now() - started < 3000, "取消后应立即返回，而不是等到超时");
+  // 已结束 / 不存在的 requestId 静默成功
+  res = await callLogged("ai:cancel-generate", "req-1");
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(res.canceled, false);
+  server.delayMs = 0;
+
   // 参数错误 / 无素材 / 模型不存在
   assert.strictEqual((await callLogged("ai:generate", { kind: "evil", context: ctx })).ok, false);
   assert.ok(/素材/.test((await callLogged("ai:generate", { kind: "title", context: {} })).message));

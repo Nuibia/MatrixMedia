@@ -29,12 +29,17 @@ function wrap(handler) {
     try {
       return { ok: true, ...(await handler(...args)) };
     } catch (error) {
-      return { ok: false, message: (error && error.message) || "操作失败" };
+      const res = { ok: false, message: (error && error.message) || "操作失败" };
+      if (error && error.canceled) res.canceled = true;
+      return res;
     }
   };
 }
 
 export function registerAiContentIpc(ipcMain, { store, generate = generateContent, test = testConnection }) {
+  /** 进行中的生成请求：requestId -> AbortController，供 ai:cancel-generate 中止 */
+  const pending = new Map();
+
   ipcMain.handle("ai:list-providers", wrap(async () => store.list()));
 
   ipcMain.handle(
@@ -84,12 +89,36 @@ export function registerAiContentIpc(ipcMain, { store, generate = generateConten
   ipcMain.handle(
     "ai:generate",
     wrap(async (payload) => {
-      const { kind, context, providerId } = payload || {};
+      const { kind, context, providerId, requestId } = payload || {};
       if (!AI_GENERATE_KINDS.includes(kind)) throw new Error("不支持的生成类型");
       if (!hasGenerateMaterial(context)) throw new Error("请先填写名称、标题或简介等素材，AI 才知道写什么");
       const provider = store.resolve(providerId);
-      const value = await generate(provider, kind, context || {});
-      return { kind, value, providerName: provider.name, model: provider.model };
+      const key = requestId ? String(requestId) : "";
+      const controller = new AbortController();
+      if (key) {
+        if (pending.has(key)) pending.get(key).abort();
+        pending.set(key, controller);
+      }
+      try {
+        const value = await generate(provider, kind, context || {}, {}, { signal: controller.signal });
+        return { kind, value, providerId: provider.id, providerName: provider.name, model: provider.model };
+      } finally {
+        if (key && pending.get(key) === controller) pending.delete(key);
+      }
+    })
+  );
+
+  /** 中止进行中的生成（弹窗关闭或用户点「取消」时调用）；requestId 不存在时静默成功 */
+  ipcMain.handle(
+    "ai:cancel-generate",
+    wrap(async (requestId) => {
+      const key = String(requestId || "");
+      const controller = pending.get(key);
+      if (controller) {
+        controller.abort();
+        pending.delete(key);
+      }
+      return { canceled: !!controller };
     })
   );
 }

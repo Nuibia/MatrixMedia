@@ -30,8 +30,19 @@ function describeHttpError(status, body) {
   return `AI 接口返回错误（${status}）${suffix}`;
 }
 
+export const AI_CANCELED_MESSAGE = "已取消生成";
+
+export function isCanceledError(error) {
+  return !!(error && (error.code === "ERR_CANCELED" || error.name === "CanceledError" || error.__CANCEL__ || error.canceled));
+}
+
 export function toFriendlyError(error, apiKey) {
   let message;
+  if (isCanceledError(error)) {
+    const canceled = new Error(AI_CANCELED_MESSAGE);
+    canceled.canceled = true;
+    return canceled;
+  }
   if (error && error.response) {
     message = describeHttpError(error.response.status, error.response.data);
   } else if (error && (error.code === "ECONNABORTED" || error.code === "ETIMEDOUT" || /timeout/i.test(error.message || ""))) {
@@ -45,14 +56,16 @@ export function toFriendlyError(error, apiKey) {
 }
 
 export async function chatCompletion(
-  { baseURL, apiKey, model, messages, temperature = 0.8, maxTokens, timeoutMs = AI_REQUEST_TIMEOUT_MS },
+  { baseURL, apiKey, model, messages, temperature = 0.8, maxTokens, timeoutMs = AI_REQUEST_TIMEOUT_MS, signal },
   { http = axios } = {}
 ) {
   const body = { model, messages, temperature, stream: false };
   if (maxTokens) body.max_tokens = maxTokens;
   let res;
   try {
+    if (signal && signal.aborted) throw Object.assign(new Error("canceled"), { code: "ERR_CANCELED" });
     res = await http.request({
+      signal,
       method: "POST",
       url: `${baseURL}/chat/completions`,
       data: body,
@@ -73,7 +86,7 @@ export async function chatCompletion(
 }
 
 /** 生成标题 / 正文 / 标签 */
-export async function generateContent(provider, kind, context, deps = {}) {
+export async function generateContent(provider, kind, context, deps = {}, { signal } = {}) {
   const messages = buildGenerateMessages(kind, context);
   const isArticleBody = kind === "body" && context && context.contentType === "article";
   const text = await chatCompletion(
@@ -83,6 +96,7 @@ export async function generateContent(provider, kind, context, deps = {}) {
       model: provider.model,
       messages,
       maxTokens: isArticleBody ? 3000 : 800,
+      signal,
     },
     deps
   );

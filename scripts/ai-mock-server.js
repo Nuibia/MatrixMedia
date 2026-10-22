@@ -40,13 +40,14 @@ function createMockServer({ validKey = VALID_KEY, delayMs = 300 } = {}) {
       }
       if (json.model === "missing-model") return send(404, { error: { message: "model not found" } });
       const prompt = (json.messages || []).map((m) => m.content).join("\n");
-      setTimeout(() => send(200, {
+      setTimeout(() => !res.writableEnded && !res.destroyed && send(200, {
         id: "mock", object: "chat.completion", model: json.model,
         choices: [{ index: 0, message: { role: "assistant", content: reply(prompt) }, finish_reason: "stop" }],
-      }), delayMs);
+      }), server.delayMs);
     });
   });
   server.requests = requests;
+  server.delayMs = delayMs;
   return server;
 }
 
