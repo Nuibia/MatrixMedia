@@ -84,20 +84,41 @@ export function normalizeProviderInput(input) {
   };
 }
 
-/** 界面展示用：只保留前 3 位与后 4 位，其余用 * 号代替 */
+/**
+ * 界面展示用：长 Key（>= 16 位）保留前 3 位与后 4 位；
+ * 较短的 Key 只保留后 4 位，避免露出的字符占比过高；<= 8 位全部打码。
+ */
 export function maskApiKey(key) {
   const k = str(key).trim();
   if (!k) return "";
   if (k.length <= 8) return "*".repeat(k.length);
+  if (k.length < 16) return `${"*".repeat(k.length - 4)}${k.slice(-4)}`;
   return `${k.slice(0, 3)}${"*".repeat(Math.min(12, k.length - 7))}${k.slice(-4)}`;
 }
 
-/** 把任意字符串里出现的 Key 替换掉，防止接口错误信息回显 Key 后被打进日志或弹窗 */
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * 把任意字符串里出现的 Key 替换掉，防止接口错误信息回显 Key 后被打进日志或弹窗。
+ * 除了原文，还覆盖 URL 编码后的 Key、截断回显（以 Key 前 8 位开头的片段）
+ * 以及 `Bearer xxx` / `Authorization: xxx` 这类请求头内容。
+ */
 export function redactSecret(text, secret) {
-  const s = str(text);
+  let s = str(text);
+  s = s.replace(/(authorization["']?\s*[:=]\s*["']?)(?:bearer\s+)?[^\s"',;}]+/gi, "$1***");
+  s = s.replace(/\bbearer\s+[^\s"',;}]+/gi, "Bearer ***");
   const k = str(secret).trim();
   if (!k || k.length < 4) return s;
-  return s.split(k).join(maskApiKey(k));
+  const masked = maskApiKey(k);
+  for (const variant of new Set([k, encodeURIComponent(k)])) {
+    s = s.split(variant).join(masked);
+  }
+  if (k.length >= 12) {
+    s = s.replace(new RegExp(`${escapeRegExp(k.slice(0, 8))}[^\\s"',;}]*`, "g"), masked);
+  }
+  return s;
 }
 
 function clip(v, max = MAX_CONTEXT_FIELD) {
@@ -192,19 +213,25 @@ function stripWrappingQuotes(s) {
   return t;
 }
 
+/** 按字符（而非 UTF-16 码元）截断，避免把 emoji 等代理对切成半个 */
+function sliceChars(s, n) {
+  const chars = Array.from(s);
+  return chars.length > n ? chars.slice(0, n).join("") : s;
+}
+
 export function parseTitle(text) {
   const cleaned = stripModelNoise(text);
   const firstLine = cleaned.split(/\r?\n/).map((l) => l.trim()).find(Boolean) || "";
   let t = firstLine.replace(/^(?:\d+[.、)]\s*|[-*•]\s*)/, "");
   t = t.replace(/^(?:标题|title)\s*[:：]\s*/i, "");
   t = stripWrappingQuotes(t).replace(/^#+\s*/, "").trim();
-  return t.slice(0, 100);
+  return sliceChars(t, 100);
 }
 
 export function parseBody(text, { maxLength = 2000 } = {}) {
   let t = stripModelNoise(text).replace(/^(?:正文|简介|内容)\s*[:：]\s*/, "");
   t = t.replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
-  return maxLength > 0 && t.length > maxLength ? t.slice(0, maxLength) : t;
+  return maxLength > 0 ? sliceChars(t, maxLength) : t;
 }
 
 export function parseTags(text, { max = 10 } = {}) {

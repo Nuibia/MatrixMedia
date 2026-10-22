@@ -287,7 +287,7 @@ export default {
     },
     onAiBody(value) {
       if (this.articleFilePath) {
-        this.$message.info("正文框有内容时优先使用正文框，已选择的文章文件将不会被读取");
+        this.$message.info("AI 生成的内容已填入正文框，发布时将使用正文框内容，已选择的文章文件不会被使用");
       }
       this.form.content = value;
     },

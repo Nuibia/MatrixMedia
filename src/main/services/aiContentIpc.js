@@ -6,6 +6,10 @@ import { generateContent, testConnection } from "./aiClient.js";
 /**
  * AI 生成相关 IPC。只接受本应用自己的页面（file:// 或 dev 的 localhost）调用，
  * 账号登录窗里加载的外部平台页面一律拒绝，避免第三方页面读取配置或盗用额度。
+ *
+ * 注意：这里假设应用内只有本应用自己的界面会从 http(s)://localhost / 127.0.0.1 加载
+ * （即开发模式的 dev server）。如果以后有登录窗或内嵌页加载本地第三方页面
+ * （本地 mock、平台回调页等），需要把这里收窄到固定端口或改用其它校验方式。
  */
 function isLocalAppSender(event) {
   try {

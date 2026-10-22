@@ -38,6 +38,18 @@ assert.ok(!masked.includes("1234567890abcdef"));
 assert.strictEqual(ai.maskApiKey("short"), "*****");
 assert.strictEqual(ai.maskApiKey(""), "");
 assert.strictEqual(ai.redactSecret(`Incorrect API key provided: ${key}`, key).includes(key), false);
+// 短 Key（< 16 位）只露后 4 位
+assert.strictEqual(ai.maskApiKey("abcdefghijkl"), "********ijkl");
+// URL 编码、截断回显、Authorization / Bearer 都要去掉
+const keyEnc = "sk-ab/cd+ef=1234567890";
+assert.ok(!ai.redactSecret(`bad key ${encodeURIComponent(keyEnc)}`, keyEnc).includes(encodeURIComponent(keyEnc)));
+const truncated = ai.redactSecret(`Incorrect API key provided: ${key.slice(0, 14)}****`, key);
+assert.ok(!truncated.includes(key.slice(0, 10)), truncated);
+const hdr = ai.redactSecret('headers: {"Authorization":"Bearer sk-other-secret-123"} and Bearer tok_abc', key);
+assert.ok(!hdr.includes("sk-other-secret-123") && !hdr.includes("tok_abc"), hdr);
+// 截断不切半个 emoji
+assert.strictEqual(ai.parseTitle("😀".repeat(120)), "😀".repeat(100));
+assert.strictEqual(ai.parseBody("a😀b", { maxLength: 2 }), "a😀");
 
 // 提示词
 const msgs = ai.buildGenerateMessages("title", { name: "周末去爬山", tags: ["#户外", "徒步"] });
