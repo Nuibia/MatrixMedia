@@ -10,15 +10,31 @@
     >
       <el-form label-width="96px" class="meta-form">
         <el-form-item label="文章标题">
-          <el-input v-model="form.title" placeholder="请输入文章标题" />
+          <div class="ai-field-row">
+            <el-input v-model="form.title" placeholder="请输入文章标题" />
+            <ai-generate-button
+              :active="metaVisible"
+              kind="title"
+              :get-context="getAiContext"
+              @generated="onAiTitle"
+            />
+          </div>
         </el-form-item>
         <el-form-item label="正文">
-          <el-input
-            v-model="form.content"
-            type="textarea"
-            :rows="8"
-            placeholder="请输入正文，或选择 .md/.txt 文章文件"
-          />
+          <div class="ai-field-row">
+            <el-input
+              v-model="form.content"
+              type="textarea"
+              :rows="8"
+              placeholder="请输入正文，或选择 .md/.txt 文章文件"
+            />
+            <ai-generate-button
+              :active="metaVisible"
+              kind="body"
+              :get-context="getAiContext"
+              @generated="onAiBody"
+            />
+          </div>
         </el-form-item>
         <el-form-item label="文章文件">
           <el-button size="mini" @click="selectArticleFile"
@@ -38,16 +54,24 @@
           <el-input v-model="form.category" placeholder="默认 前端" />
         </el-form-item>
         <el-form-item label="标签">
-          <el-select
-            v-model="tags"
-            multiple
-            filterable
-            allow-create
-            default-first-option
-            no-data-text="请输入标签"
-            placeholder="输入标签，回车添加为条目"
-            style="width: 100%"
-          ></el-select>
+          <div class="ai-field-row">
+            <el-select
+              v-model="tags"
+              multiple
+              filterable
+              allow-create
+              default-first-option
+              no-data-text="请输入标签"
+              placeholder="输入标签，回车添加为条目"
+              style="width: 100%"
+            ></el-select>
+            <ai-generate-button
+              :active="metaVisible"
+              kind="tags"
+              :get-context="getAiContext"
+              @generated="onAiTags"
+            />
+          </div>
         </el-form-item>
         <el-form-item label="摘要">
           <el-input
@@ -167,6 +191,7 @@ import dataRequest from "@/utils/dataRequest";
 import ptConfig from "@/utils/configUrl";
 import openLoginWindow from "@/utils/openLoginWindow";
 import { buildArticleRepublishState } from "@/utils/articleRepublish";
+import AiGenerateButton from "@/components/ai/AiGenerateButton.vue";
 import {
   setAccountLoginFlag,
   clearAccountLoginFlag,
@@ -194,6 +219,7 @@ function formatTags(tags) {
 }
 
 export default {
+  components: { AiGenerateButton },
   name: "LocalArticlePublish",
   data() {
     return {
@@ -249,6 +275,34 @@ export default {
     }
   },
   methods: {
+    /** AI 生成素材：文章文件名 + 已填的标题 / 正文 / 摘要 / 标签 */
+    getAiContext() {
+      return {
+        contentType: "article",
+        name: this.articleFilePath ? this.articleFileName : "",
+        title: this.form.title,
+        body: this.form.content || this.form.summary,
+        tags: this.tags,
+      };
+    },
+    onAiTitle(value) {
+      this.form.title = value;
+    },
+    onAiBody(value) {
+      if (this.articleFilePath) {
+        this.$message.info("AI 生成的内容已填入正文框，发布时将使用正文框内容，已选择的文章文件不会被使用");
+      }
+      this.form.content = value;
+    },
+    onAiTags(list) {
+      const exist = new Set(this.tags.map(String));
+      (list || []).forEach((t) => {
+        if (!exist.has(t)) {
+          this.tags.push(t);
+          exist.add(t);
+        }
+      });
+    },
     open() {
       this.resetState();
       this.metaVisible = true;
@@ -700,6 +754,15 @@ export default {
 </script>
 
 <style scoped>
+.ai-field-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.ai-field-row > :first-child {
+  flex: 1;
+  min-width: 0;
+}
 .meta-form {
   margin-bottom: 8px;
 }

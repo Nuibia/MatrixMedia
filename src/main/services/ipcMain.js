@@ -4,6 +4,7 @@ import {
   BrowserWindow,
   app as electronApp,
   shell,
+  safeStorage,
 } from "electron";
 import { spawn } from "child_process";
 import Server from "../server/index";
@@ -20,6 +21,8 @@ import { pickReleaseInstaller } from "./pickReleaseInstaller";
 import { applyAccountProxyForTask } from "./proxyConfig";
 import { SERVER_REQUEST_TOKEN } from "../server/requestGuard";
 import { registerTelemetryPreferenceIpc } from "./telemetryPreferenceIpc.js";
+import { registerAiContentIpc } from "./aiContentIpc.js";
+import { createAiKeyStore } from "./aiKeyStore.js";
 import { registerDataStatsIpc } from "./dataStats/index.js";
 import { runSphChromeLogin } from "./cliLogin/sphChromeLogin.js";
 import { prepareSphAccountLoginSession } from "./sphLoginSession.js";
@@ -155,6 +158,14 @@ export default {
     });
 
     registerTelemetryPreferenceIpc(ipcMain);
+
+    // AI 生成标题 / 正文 / 标签：Key 加密存在 userData，请求只在主进程发出
+    registerAiContentIpc(ipcMain, {
+      store: createAiKeyStore({
+        filePath: path.join(electronApp.getPath("userData"), "ai-settings.json"),
+        safeStorage,
+      }),
+    });
 
     // 检查更新：只做「是否有新版本」的检测并返回版本信息，
     // 不再自动开始下载 —— 是否下载由用户点击「立即更新」后
