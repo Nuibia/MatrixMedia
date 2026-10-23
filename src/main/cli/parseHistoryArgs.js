@@ -41,6 +41,25 @@ const STATUS_ALIASES = {
   任务过期: "expired",
 };
 
+/** 带值选项的值不能缺失，也不能是下一个选项（以 - 开头） */
+function readValue(args, i, flag) {
+  const v = args[i + 1];
+  if (v === undefined || (typeof v === "string" && /^-/.test(v))) {
+    return { ok: false, error: `${flag} 需要一个值，例如 ${flag} <值>` };
+  }
+  return { ok: true, value: v, next: i + 1 };
+}
+
+/** 严格正整数：拒绝 "30garbage"、"2.5"、"-3" 之类被 parseInt 静默截断的输入 */
+function readPositiveInt(args, i, flag, unit) {
+  const v = readValue(args, i, flag);
+  if (!v.ok) return v;
+  if (!/^\d+$/.test(String(v.value).trim()) || parseInt(v.value, 10) < 1) {
+    return { ok: false, error: `${flag} 需为正整数${unit ? `（${unit}）` : ""}` };
+  }
+  return { ok: true, value: parseInt(v.value, 10), next: i + 1 };
+}
+
 export function parseHistoryArgs(subArgv) {
   const args = Array.isArray(subArgv) ? subArgv : [];
   if (args.includes("--help") || args.includes("-h")) {
@@ -61,27 +80,40 @@ export function parseHistoryArgs(subArgv) {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--platform" || a === "-p") {
-      out.platform = args[++i];
+      const v = readValue(args, i, a);
+      if (!v.ok) return v;
+      out.platform = v.value;
+      i = v.next;
     } else if (a === "--phone") {
-      out.phone = args[++i];
+      const v = readValue(args, i, a);
+      if (!v.ok) return v;
+      out.phone = v.value;
+      i = v.next;
     } else if (a === "--status" || a === "-s") {
-      out.status = args[++i];
+      const v = readValue(args, i, a);
+      if (!v.ok) return v;
+      out.status = v.value;
+      i = v.next;
     } else if (a === "--days" || a === "-d") {
-      const n = parseInt(args[++i], 10);
-      if (!Number.isFinite(n) || n < 1) {
-        return { ok: false, error: "--days 需为正整数（天）" };
-      }
-      out.days = n;
+      const v = readPositiveInt(args, i, a, "天");
+      if (!v.ok) return v;
+      out.days = v.value;
+      i = v.next;
     } else if (a === "--limit" || a === "-n") {
-      const n = parseInt(args[++i], 10);
-      if (!Number.isFinite(n) || n < 1) {
-        return { ok: false, error: "--limit 需为正整数" };
-      }
-      out.limit = n;
+      const v = readPositiveInt(args, i, a);
+      if (!v.ok) return v;
+      out.limit = v.value;
+      i = v.next;
     } else if (a === "--since") {
-      out.since = args[++i];
+      const v = readValue(args, i, a);
+      if (!v.ok) return v;
+      out.since = v.value;
+      i = v.next;
     } else if (a === "--until") {
-      out.until = args[++i];
+      const v = readValue(args, i, a);
+      if (!v.ok) return v;
+      out.until = v.value;
+      i = v.next;
     } else if (a === "--json") {
       out.json = true;
     } else {
