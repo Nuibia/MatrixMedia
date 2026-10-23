@@ -43,8 +43,20 @@ export function parseProxyUrl(rawUrl) {
   const defaultPort =
     scheme === "https" ? "443" : scheme.startsWith("socks") ? "1080" : "80";
   const port = parsed.port || defaultPort;
-  const username = decodeURIComponent(parsed.username || "");
-  const password = decodeURIComponent(parsed.password || "");
+
+  // 凭据里的百分号编码可能畸形（如 "user%"、"%FF"），decodeURIComponent 会抛 URIError，
+  // 这里按函数约定转成 { ok: false, error }，不让异常扩散到设置页保存等调用链
+  let username;
+  let password;
+  try {
+    username = decodeURIComponent(parsed.username || "");
+    password = decodeURIComponent(parsed.password || "");
+  } catch (_) {
+    return {
+      ok: false,
+      error: "代理账号或密码包含无效的百分号编码（例如单独的 % 或 %GG），请检查后重新填写",
+    };
+  }
 
   let proxyRules;
   if (scheme === "socks4") {
