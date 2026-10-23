@@ -15,6 +15,117 @@ import {
   pollPageUntil,
 } from "./uploadTimeouts.js";
 
+export const KS_DESCRIPTION_SELECTOR = "#work-description-edit";
+
+function collapseText(t) {
+  return String(t || "").replace(/\s+/g, "");
+}
+
+/** 读取快手描述编辑器当前内容（页面已销毁时返回空串） */
+function readKsDescription(page) {
+  return page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    return el ? String(el.innerText || el.textContent || "") : "";
+  }, KS_DESCRIPTION_SELECTOR);
+}
+
+/**
+ * 快手没有单独的标题输入框，作品标题取自描述文案；用户填了标题时把它拼在描述最前面
+ * （描述已以标题开头时不重复拼接）。#34
+ */
+export function composeKsFillText({ title, description } = {}) {
+  const t = String(title || "").trim();
+  const d = String(description || "").trim();
+  if (!t) return d;
+  if (!d) return t;
+  if (collapseText(d).startsWith(collapseText(t))) return d;
+  return `${t}\n${d}`;
+}
+
+/**
+ * 往快手描述编辑器（#work-description-edit，contenteditable 自定义组件）写文案。
+ *
+ * keyboard.type 对这类组件在隐藏窗口/遮罩残留时经常不落地（#34：静默发出空标题作品），
+ * 所以每次写入后必须回读校验：
+ *   1. 主路径 click 聚焦 + keyboard.type；
+ *   2. 回读未落地 → 清空后用 document.execCommand('insertText') 兜底（同小红书适配器）；
+ *   3. 重试 maxAttempts 次（默认 3），仍失败则抛错中止发布，
+ *      宁可走失败上报/自动重试，也不能把空标题/空简介的作品发出去。
+ */
+export async function fillKsDescription(page, fillText, { maxAttempts = 3 } = {}) {
+  await page.waitForSelector(KS_DESCRIPTION_SELECTOR, {
+    timeout: WAIT_SELECTOR_APPEAR_MS,
+  });
+  const expected = collapseText(fillText);
+  let landed = "";
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    // 聚焦 + 清空旧内容：puppeteer click 定位 caret，evaluate focus 双保险，再全选删除
+    try {
+      await page.click(KS_DESCRIPTION_SELECTOR, { clickCount: 3 });
+    } catch (_) {
+      // click 偶发失败不致命，下面 evaluate focus 兜底
+    }
+    await page.evaluate((sel) => {
+      var el = document.querySelector(sel);
+      if (!el) return;
+      el.focus();
+      var s = window.getSelection && window.getSelection();
+      if (s && s.selectAllChildren) {
+        try {
+          s.selectAllChildren(el);
+        } catch (_) {}
+      }
+      if (document.execCommand) document.execCommand("delete");
+    }, KS_DESCRIPTION_SELECTOR);
+    if (fillText) {
+      await page.keyboard.type(fillText, { delay: 50 });
+    }
+
+    landed = collapseText(await readKsDescription(page));
+    if (!expected || (landed && landed.includes(expected))) {
+      if (attempt > 1) console.log(`[ks] 描述已在第 ${attempt} 次尝试写入`);
+      return true;
+    }
+    console.warn(
+      `[ks] 第 ${attempt} 次填写描述未落地（回读到 ${landed.length} 字），尝试 execCommand 兜底`
+    );
+
+    // 兜底：全选删除后 insertText，对富文本组件比键盘事件可靠
+    await page.evaluate(
+      (payload) => {
+        var el = document.querySelector(payload.sel);
+        if (!el) return;
+        el.focus();
+        if (document.createRange && window.getSelection) {
+          try {
+            var r = document.createRange();
+            r.selectNodeContents(el);
+            var s = window.getSelection();
+            s.removeAllRanges();
+            s.addRange(r);
+          } catch (_) {}
+        }
+        if (document.execCommand) {
+          document.execCommand("delete");
+          document.execCommand("insertText", false, payload.text);
+        }
+      },
+      { sel: KS_DESCRIPTION_SELECTOR, text: fillText }
+    );
+
+    landed = collapseText(await readKsDescription(page));
+    if (!expected || (landed && landed.includes(expected))) {
+      console.log(`[ks] 描述已通过 execCommand 兜底写入（第 ${attempt} 次尝试）`);
+      return true;
+    }
+  }
+
+  throw new Error(
+    `快手描述填写失败：尝试 ${maxAttempts} 次后文案仍未写入编辑器（编辑器当前 ${landed.length} 字），为避免发出空标题/空简介的作品已中止本次发布`
+  );
+}
+
 async function selectKsCreativeStatement(page, data) {
   const value = data.data && data.data.creativeStatement;
   console.log("[ks] creativeStatement 值 =", value);
@@ -194,6 +305,7 @@ export default async function (page, data, window, event) {
   const submitText = isDraftMode ? "取消" : "发布";
 
   console.log(data);
+  let descFillText = "";
   try {
     let sel = '#joyride-wrapper input[type="file"]';
     await page.waitForSelector(sel, { timeout: WAIT_SELECTOR_APPEAR_MS });
@@ -203,17 +315,15 @@ export default async function (page, data, window, event) {
     console.error("文件上传失败:", err);
   }
 
+  // 描述（含标题拼接）填写：回读校验 + execCommand 兜底，失败抛错中止发布（#34）。
+  // 抛错交给上层失败上报/自动重试，避免静默发出空标题/空简介的作品。
   try {
     const text = buildPlatformVideoText("快手", data.data);
-    const selector = "#work-description-edit";
-    await page.waitForSelector(selector, { timeout: WAIT_SELECTOR_APPEAR_MS });
-    const input = await page.$(selector);
-    await input.click();
-    if (text.description) {
-      await page.keyboard.type(text.description, { delay: 50 });
-    }
+    descFillText = composeKsFillText(text);
+    await fillKsDescription(page, descFillText);
   } catch (e) {
-    console.error("❌ 输入标题失败", e);
+    console.error("❌ 快手描述填写失败:", e?.message || e);
+    throw e;
   }
   try {
     await page.click(".ant-checkbox-group>label:nth-of-type(2)", {
@@ -258,6 +368,13 @@ export default async function (page, data, window, event) {
     // 在 hidden window 下几何中心常落不到真正的 <button> 上，结果是"看起来点过了但没发"。
     // 改为在 evaluate 内部遍历真实 button / 行 div，直接调 DOM .click()，避开鼠标几何问题。
     // 快手草稿功能和发布一个逻辑一个是 发布 一个是取消两个字
+    // 提交前最后回读一次：编辑器被页面清空/重置时中止，避免发出空标题简介的作品（#34）
+    if (descFillText) {
+      const landed = await readKsDescription(page);
+      if (!collapseText(landed)) {
+        throw new Error("提交前校验失败：快手描述编辑器为空（可能被页面重置），已中止发布");
+      }
+    }
     const urlBefore = readPageUrl(page);
     const clicked = await page.evaluate((text) => {
       const norm = (t) =>
