@@ -79,6 +79,17 @@ export async function replyPublishOutcome({
     publishPageUrl: urlAfter,
     message: abnormal ? PUBLISH_ABNORMAL_MESSAGE : successMessage,
   };
+  // 草稿模式不跳转，地址未变化属正常，不能据此判异常（发布模式的判定见下）。
+  // 但仍把「点击存草稿后地址是否变化」记录下来并打日志，便于排查
+  // 「回报成功但后台没有草稿」时区分是点了没反应，还是存到了别处。
+  if (isDraftMode && urlBefore && urlAfter) {
+    payload.draftUrlUnchanged = urlUnchanged;
+    console.log(
+      `[publish] ${data.pt || ""} 存草稿后页面地址${
+        urlUnchanged ? "未变化" : "已变化"
+      }（草稿模式仅记录，不判定异常）：${urlAfter}`
+    );
+  }
   if (abnormal) {
     payload.publishAbnormal = true;
     payload.outcome = "publish_abnormal";

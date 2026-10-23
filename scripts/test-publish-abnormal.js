@@ -112,6 +112,27 @@ function createEvent() {
     const payload = event.calls[0].payload;
     assert.strictEqual(payload.publishAbnormal, undefined);
     assert.strictEqual(payload.message, "保存草稿成功");
+    // 草稿模式记录「点击后地址是否变化」用于排查，但不判定异常（#42）
+    assert.strictEqual(payload.draftUrlUnchanged, true);
+  }
+
+  // 3b. 草稿模式点击后地址变了：同样不判异常，只记录
+  {
+    const page = createPage(["https://x.com/publish", "https://x.com/drafts"]);
+    const event = createEvent();
+    await replyPublishOutcome({
+      page,
+      data: { pt: "抖音", closeWindowAfterPublish: false },
+      window: null,
+      event,
+      urlBefore: "https://x.com/publish",
+      isDraftMode: true,
+      waitMs: 0,
+      successMessage: "保存草稿成功",
+    });
+    const payload = event.calls[0].payload;
+    assert.strictEqual(payload.publishAbnormal, undefined);
+    assert.strictEqual(payload.draftUrlUnchanged, false);
   }
 
   // 4. 末尾斜杠差异不算跳转
