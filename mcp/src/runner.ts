@@ -69,13 +69,19 @@ export function defaultInstallLocations(): string[] {
     const pf = [process.env.ProgramFiles, process.env['ProgramFiles(x86)']].filter(
       (p): p is string => Boolean(p)
     );
-    const dirs = ['矩媒', 'matrix-video', 'MatrixMedia'];
+    // 当前安装目录由 executableName 决定为 matrixmedia；其余为历史版本目录，保留兼容探测
+    const dirs = ['matrixmedia', '矩媒', 'MatrixMedia', 'matrix-video'];
     return [
       ...dirs.map(d => path.join(local, 'Programs', d, 'matrixmedia.exe')),
       ...pf.flatMap(p => dirs.map(d => path.join(p, d, 'matrixmedia.exe'))),
     ];
   }
-  return ['/opt/矩媒/matrixmedia', '/opt/MatrixMedia/matrixmedia', '/usr/bin/matrixmedia'];
+  return [
+    '/opt/matrixmedia/matrixmedia',
+    '/opt/矩媒/matrixmedia',
+    '/opt/MatrixMedia/matrixmedia',
+    '/usr/bin/matrixmedia',
+  ];
 }
 
 /** When running from a source checkout (mcp/dist/runner.js), the repo root is two levels up. */

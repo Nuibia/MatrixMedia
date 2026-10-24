@@ -22,7 +22,7 @@
 
 1. 环境变量 `MATRIXMEDIA_BIN`（可执行文件绝对路径）
 2. PATH 中的 `matrixmedia`
-3. 默认安装位置（macOS `/Applications/matrixmedia.app`、Windows `%LOCALAPPDATA%\Programs\矩媒`、Linux `/opt/矩媒`）
+3. 默认安装位置（macOS `/Applications/matrixmedia.app`、Windows `%LOCALAPPDATA%\Programs\matrixmedia`、Linux `/opt/matrixmedia`）
 4. 环境变量 `MATRIXMEDIA_DIR` 指向的源码仓库（开发模式，使用仓库内 electron）
 
 ## 工具

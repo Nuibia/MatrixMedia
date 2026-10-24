@@ -61,7 +61,7 @@ electron . cli login -p sph --phone 宠物 --show
 无显示器或 SSH 环境下请用 `xvfb-run -a` 提供虚拟显示：
 
 ```bash
-xvfb-run -a ./矩媒.AppImage cli login -p dy --phone 13800138000
+xvfb-run -a ./MatrixMedia-*-linux-x86_64.AppImage cli login -p dy --phone 13800138000
 ```
 
 若 stdout 不是 TTY（如管道重定向），终端截图可能无法正常展示，请在可交互终端中执行。参数见 `cli login --help`。成功后再执行 `cli publish`。
@@ -73,7 +73,7 @@ xvfb-run -a ./矩媒.AppImage cli login -p dy --phone 13800138000
 electron . cli publish -p dy --phone 13800138000 -f /path/to/video.mp4 -t "标题"
 
 # Windows 安装包产物
-"矩媒.exe" cli publish -p dy --phone 13800138000 -f C:\video.mp4 -t "标题"
+matrixmedia.exe cli publish -p dy --phone 13800138000 -f C:\video.mp4 -t "标题"
 ```
 
 ### 参数摘要

@@ -6,7 +6,7 @@ description: 通过矩媒 MatrixMedia 桌面端把本地或远程视频一键发
 description_zh: 自媒体视频矩阵一键发布到 8 大平台
 description_en: Publish videos to 8 Chinese short-video platforms via the MatrixMedia desktop app
 category: productivity
-version: 1.0.0
+version: 1.0.1
 author: MatrixMedia
 allowed-tools: Bash, Read
 ---
@@ -21,14 +21,17 @@ allowed-tools: Bash, Read
 
 | 系统    | 候选命令                                                                                       |
 | ------- | ---------------------------------------------------------------------------------------------- |
-| 通用    | `matrixmedia`（PATH 中可用时）                                                                 |
-| macOS   | `/Applications/matrixmedia.app/Contents/MacOS/matrixmedia`                                     |
-| Windows | `"%LOCALAPPDATA%\Programs\矩媒\matrixmedia.exe"`（NSIS 安装器会自动把安装目录加入用户 PATH） |
-| Linux   | `matrixmedia`（deb/rpm）或 AppImage 文件的绝对路径                                             |
+| 通用    | `matrixmedia`（PATH 中可用时）                                                                                                    |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| macOS   | `/Applications/matrixmedia.app/Contents/MacOS/matrixmedia`                                                                        |
+| Windows | `"%LOCALAPPDATA%\Programs\matrixmedia\matrixmedia.exe"`；自定义/管理员安装时在 `"C:\Program Files\matrixmedia\matrixmedia.exe"` |
+| Linux   | `matrixmedia`（deb/rpm）或 AppImage 文件的绝对路径                                                                                |
+
+注意：Windows 安装器会把安装目录写入用户 PATH，但**只对安装后新启动的终端/应用生效**。若 `matrixmedia` 在 PATH 找不到（典型：workbuddy 内嵌 gitbash 在安装前已启动），直接试上表的绝对路径，或提示用户重启终端/应用。
 
 自检命令：`$MM cli --help`，能输出用法即可。
 
-**如果都不可用**：停止执行，告诉用户需要先安装矩媒桌面端，并给出下载地址，不要尝试任何 `cli` 命令：
+**只试上表中的候选，禁止在文件系统里搜索/遍历找 CLI**（既慢又不可靠）。候选全部不可用时：停止执行，告诉用户需要先安装矩媒桌面端，并给出下载地址，不要尝试任何 `cli` 命令：
 
 - GitHub：https://github.com/hanliang97/MatrixMedia/releases
 - 国内 Gitee：https://gitee.com/gzlingyi_0/pubtw/releases

@@ -15,7 +15,7 @@ cd mcp && npm install && npm run build
 ## 配置 AI 工具
 
 MCP Server 按以下顺序寻找 MatrixMedia：环境变量 `MATRIXMEDIA_BIN`（可执行文件绝对路径）→ PATH 中的 `matrixmedia` →
-默认安装位置（macOS `/Applications/matrixmedia.app`、Windows `%LOCALAPPDATA%\Programs\矩媒`、Linux `/opt/矩媒`）→
+默认安装位置（macOS `/Applications/matrixmedia.app`、Windows `%LOCALAPPDATA%\Programs\matrixmedia`、Linux `/opt/matrixmedia`）→
 `MATRIXMEDIA_DIR` 指向的源码仓库（开发模式）。已安装桌面端时无需设置任何环境变量；以下示例为源码开发模式，
 `MATRIXMEDIA_DIR` 设为本仓库根目录的绝对路径。
 

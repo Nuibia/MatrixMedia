@@ -1,7 +1,7 @@
 !include "WinMessages.nsh"
 
 !macro customInstall
-  ; 安装后将应用安装目录加入当前用户 PATH，便于直接执行 `矩媒 cli ...`
+  ; 安装后将应用安装目录加入当前用户 PATH，便于直接执行 `matrixmedia cli ...`
   nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -Command "$$ErrorActionPreference = ''Stop''; $$dir = [System.IO.Path]::GetFullPath(''$INSTDIR''); $$path = [Environment]::GetEnvironmentVariable(''Path'', ''User''); $$parts = @(); if (-not [string]::IsNullOrWhiteSpace($$path)) { $$parts = $$path -split ''\;'' | ForEach-Object { $$_.Trim() } | Where-Object { $$_ -ne '''' } }; if ($$parts -notcontains $$dir) { $$parts += $$dir }; [Environment]::SetEnvironmentVariable(''Path'', ([string]::Join('';'', ($$parts | Select-Object -Unique))), ''User'')"'
   Pop $0
 

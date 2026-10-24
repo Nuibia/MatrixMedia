@@ -1,6 +1,6 @@
 {
   "name": "matrixmedia-expert",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Self-media matrix publishing operator: adapts one video's title, description and tags to each platform's rules, publishes to 8 Chinese short-video platforms via MatrixMedia, and reviews account data.",
   "author": {
     "name": "liuhanliang",

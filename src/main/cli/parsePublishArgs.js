@@ -663,7 +663,7 @@ export function publishHelpText() {
 退出码 (批量 --dir): 0 全部成功, 1 部分失败, 2 全部失败
 
 示例:
-  矩媒.exe cli publish -p dy --phone 13800138000 -f C:\\\\v.mp4 -t "我的视频标题" --tags "#减脂 #健身"
+  matrixmedia.exe cli publish -p dy --phone 13800138000 -f C:\\\\v.mp4 -t "我的视频标题" --tags "#减脂 #健身"
   electron . cli publish -p dy --phone 13800138000 -f ./a.mp4 --name "任务A" -t "标题" --tags "#标签1 #标签2"
   # 视频号用 --short-title，其他平台用 --description：
   matrixmedia cli publish -p sph --phone 13800138000 -f ./v.mp4 \\\\

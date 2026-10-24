@@ -71,7 +71,7 @@ Windows（PowerShell）：
 
 ```powershell
 $log = Join-Path $env:TEMP ("matrixmedia-{0}-dy.log" -f (Get-Date -UFormat %s))
-$p = Start-Process -FilePath matrixmedia -ArgumentList 'cli','publish','-p','dy','--phone','13800138000','-f','"C:\videos\video.mp4"','-t','"标题"' -RedirectStandardOutput $log -RedirectStandardError "$log.err" -PassThru -WindowStyle Hidden
+$p = Start-Process -FilePath $MM -ArgumentList 'cli','publish','-p','dy','--phone','13800138000','-f','"C:\videos\video.mp4"','-t','"标题"' -RedirectStandardOutput $log -RedirectStandardError "$log.err" -PassThru -WindowStyle Hidden
 "PID=$($p.Id) LOG=$log"
 ```
 
