@@ -11,7 +11,6 @@ import baseMenu from "../config/menu";
 
 let loadWindow = null;
 let mainWindow = null;
-setIpc.Mainfunc(IsUseSysTitle);
 // 版本以package.json为基准。
 const version = require("../../../package.json").version;
 
@@ -30,6 +29,11 @@ function resolveWindowsWindowIcon() {
 }
 
 function createMainWindow(fn) {
+  // IPC 注册延迟到窗口创建时：模块顶层调用会触发 electronApp.getPath("userData")，
+  // 此时 app.name 尚未被改为 matrix-video，userData 被缓存到 Electron/ 目录，
+  // 导致 session.fromPartition 读不到真实 cookie，CLI 登录态检测全部失效。
+  setIpc.Mainfunc(IsUseSysTitle);
+
   const menuconfig = Array.isArray(baseMenu) ? [...baseMenu] : [];
   /**
    * Initial window options
