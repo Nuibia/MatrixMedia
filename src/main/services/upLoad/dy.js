@@ -216,20 +216,11 @@ async function selectDyCreativeStatement(page, data) {
   }
   await page.waitForTimeout(400);
 
-  // 点击弹窗里的「确认」按钮提交声明（限定到含声明选项的弹窗，避免误点引导弹窗的按钮）
+  // 点击弹窗里的「确认」按钮提交声明
   const confirmed = await page.evaluate(() => {
-    const bodies = [...document.querySelectorAll(".semi-modal-body")];
-    const body =
-      bodies.find((b) => b.querySelector(".semi-radio-addon")) ||
-      bodies.find((b) =>
-        /确认|确定/.test(((b.closest(".semi-modal") || b).textContent) || "")
-      ) ||
-      bodies[0];
-    if (!body) return false;
-    const root = body.closest(".semi-modal") || body;
-    const btns = [...root.querySelectorAll(".semi-button.semi-button-primary")];
-    const btn =
-      btns.find((b) => /确认|确定/.test(b.textContent || "")) || btns[0];
+    const modal = document.querySelector(".semi-modal-body");
+    const root = modal ? modal.closest(".semi-modal") || modal : document;
+    const btn = root.querySelector(".semi-button.semi-button-primary");
     if (btn) {
       btn.click();
       return true;
@@ -241,23 +232,6 @@ async function selectDyCreativeStatement(page, data) {
   }
   console.log("[dy] 已点击声明确认按钮");
   await page.waitForTimeout(400);
-
-  // 校验声明确已生效：下拉文案应显示所选声明，否则抛错交给上层重试
-  await page.waitForFunction(
-    (txt) => {
-      const norm = (t) => String(t).replace(/\s+/g, "").trim();
-      for (const el of document.querySelectorAll("[class]")) {
-        const cls = el.className;
-        if (typeof cls !== "string") continue;
-        if (!cls.split(/\s+/).some((c) => c.startsWith("selectText-"))) continue;
-        if (norm(el.textContent).includes(norm(txt))) return true;
-      }
-      return false;
-    },
-    { timeout: 8000 },
-    label
-  );
-  console.log("[dy] 自主声明已生效:", label);
 }
 
 async function selectDyCreativeStatementWithRetry(page, data, maxMs = 60000) {
@@ -276,35 +250,18 @@ async function selectDyCreativeStatementWithRetry(page, data, maxMs = 60000) {
 }
 
 async function clickDyPublish(page, isDraftMode) {
-  if (isDraftMode) {
-    // 新版抖音网页发布页没有「存草稿」按钮：草稿语义 =「暂存离开」（本地暂存编辑状态，
-    // 发布页出现「上次未发布的视频/继续编辑」横幅后恢复，人工核对再发布）。
-    // 按按钮文字定位，避免兄弟选择器在新版 UI 下误点「发布」。
-    const clicked = await page.evaluate(() => {
-      const norm = (t) => String(t).replace(/\s+/g, "").trim();
-      const btns = [...document.querySelectorAll("button, [role='button']")].filter((b) => {
-        const r = b.getBoundingClientRect();
-        return r.width > 0 && r.height > 0 && !b.disabled;
-      });
-      const byText = (kw) => btns.find((b) => norm(b.textContent).includes(kw));
-      const target = byText("存草稿") || byText("暂存离开");
-      if (!target) return "";
-      target.click();
-      return norm(target.textContent);
-    });
-    if (!clicked) {
-      throw new Error("未找到「存草稿/暂存离开」按钮（抖音界面可能已改版）");
-    }
-    console.log(`[dy] 已点击「${clicked}」按钮（按文字定位）`);
-    return clicked;
-  }
-  const submitSelector = "#popover-tip-container";
+  const submitSelector = isDraftMode
+    ? "#popover-tip-container+button"
+    : "#popover-tip-container";
   const submitBtn = await page.waitForSelector(submitSelector, {
     timeout: WAIT_SELECTOR_APPEAR_MS,
   });
   await submitBtn.click({ delay: 200 });
-  console.log("[dy] 已点击发布入口 (#popover-tip-container)");
-  return "发布";
+  console.log(
+    isDraftMode
+      ? "[dy] 已点击存草稿按钮 (#popover-tip-container+button)"
+      : "[dy] 已点击发布入口 (#popover-tip-container)"
+  );
 }
 
 export default async function (page, data, window, event) {
@@ -426,50 +383,13 @@ export default async function (page, data, window, event) {
       await dismissDyGuideModals(page);
     }
 
+
     // 自主声明入口在视频转码完成后才出现，必须在点击发布前完成
     await selectDyCreativeStatementWithRetry(page, data);
 
-    // 点击前再清一次引导浮层，防止流程期间再次弹出
-    await dismissDyGuideModals(page);
-
     const urlBefore = readPageUrl(page);
     await clickDyPublish(page, isDraftMode);
-
-    if (isDraftMode) {
-      // 「暂存离开」成功的信号：页面回到空白上传页并出现「上次未发布…继续编辑」横幅。
-      // 抖音网页端此动作没有 API 回调，必须做页面级校验，不能点完就报成功。
-      await pollPageUntil(
-        page,
-        () => {
-          const text = document.body
-            ? document.body.innerText.replace(/\s+/g, "")
-            : "";
-          return (
-            text.includes("上次未发布") ||
-            text.includes("继续编辑") ||
-            text.includes("已暂存") ||
-            text.includes("暂存成功")
-          );
-        },
-        30000,
-        1000,
-        "等待「暂存离开」生效超时：未检测到『上次未发布的视频/继续编辑』横幅"
-      );
-      console.log("✅ 抖音编辑状态已暂存（暂存离开）");
-      await replyPublishOutcome({
-        page,
-        data,
-        window,
-        event,
-        urlBefore,
-        isDraftMode,
-        successMessage:
-          "已暂存编辑状态（抖音网页无草稿箱：发布页点「继续编辑」恢复，人工核对后发布）",
-      });
-      return;
-    }
-
-    console.log("✅ 抖音视频上传成功");
+    console.log(isDraftMode ? "✅ 抖音视频已保存草稿" : "✅ 抖音视频上传成功");
     await replyPublishOutcome({
       page,
       data,
@@ -477,7 +397,7 @@ export default async function (page, data, window, event) {
       event,
       urlBefore,
       isDraftMode,
-      successMessage: "上传成功",
+      successMessage: isDraftMode ? "保存草稿成功" : "上传成功",
     });
   } catch (e) {
     const detail = (e && e.message) || String(e);

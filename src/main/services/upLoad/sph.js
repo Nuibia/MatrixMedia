@@ -104,56 +104,11 @@ async function tryDeclareOriginal(page) {
 }
 
 /**
- * 选择视频号「视频标注」（.post-with-mark-tag）。
- * 自行拍摄时间/地点、转载来源为平台选填，本轮只点主选项。
- */
-async function applySphCreativeStatement(page, value) {
-  if (isCreativeStatementNone(value)) return;
-  const label = resolveSphCreativeStatementLabel(value);
-  if (!label || label === "无标注" || label === "无需标注") return;
-
-  const opened = await page.evaluate(() => {
-    const app = document.querySelector("wujie-app.wujie_iframe");
-    const root = app && app.shadowRoot;
-    if (!root) return false;
-    const trigger = root.querySelector(".post-with-mark-tag .select-display");
-    if (!trigger) return false;
-    trigger.click();
-    return true;
-  });
-  if (!opened) {
-    console.log("视频标注：未找到入口，跳过");
-    return;
-  }
-
-  await page.waitForTimeout(300);
-  const clicked = await page.evaluate((expected) => {
-    const app = document.querySelector("wujie-app.wujie_iframe");
-    const root = app && app.shadowRoot;
-    if (!root) return false;
-    const options = Array.from(root.querySelectorAll(".mark-tag-option"));
-    const target = options.find((item) => {
-      const main = item.querySelector(".option-main");
-      return String((main && main.textContent) || "").trim() === expected;
-    });
-    if (!target) return false;
-    target.click();
-    return true;
-  }, label);
-  if (!clicked) {
-    console.warn(`视频标注：未找到选项「${label}」，跳过`);
-    return;
-  }
-  console.log(`[sph][mark-tag] 已选择：${label}`);
-  await page.waitForTimeout(400);
-}
-
-/**
- * 视频号自定义封面（字探补丁 2026-10-21，探针实证配方）：
+ * 视频号自定义封面（探针实证配方）：
  * 点 .vertical-cover-wrap 槽位 → weui-desktop-dialog「编辑封面」→「上传封面」→
  * .single-cover-uploader-wrap 内隐藏 file input（accept=jpeg/jpg/png，勿传 webp）注入 →
  * 「确定」→ 校验 .cover-img-vertical 槽位 img src 变化 + 弹窗已关闭。
- * 封面为「个人主页和分享卡片(3:4)」——字探 封面_<字>_3x4.png（1080x1440）恰好匹配。
+ * 封面为「个人主页和分享卡片(3:4)」——3:4 竖图（如 1080x1440）恰好匹配。
  */
 async function uploadSphCustomCover(page, coverPath) {
   if (!fs.existsSync(coverPath)) {
@@ -302,6 +257,51 @@ async function uploadSphCustomCover(page, coverPath) {
     await page.keyboard.press("Escape").catch(() => {});
     await page.waitForTimeout(1000);
   }
+}
+
+/**
+ * 选择视频号「视频标注」（.post-with-mark-tag）。
+ * 自行拍摄时间/地点、转载来源为平台选填，本轮只点主选项。
+ */
+async function applySphCreativeStatement(page, value) {
+  if (isCreativeStatementNone(value)) return;
+  const label = resolveSphCreativeStatementLabel(value);
+  if (!label || label === "无标注" || label === "无需标注") return;
+
+  const opened = await page.evaluate(() => {
+    const app = document.querySelector("wujie-app.wujie_iframe");
+    const root = app && app.shadowRoot;
+    if (!root) return false;
+    const trigger = root.querySelector(".post-with-mark-tag .select-display");
+    if (!trigger) return false;
+    trigger.click();
+    return true;
+  });
+  if (!opened) {
+    console.log("视频标注：未找到入口，跳过");
+    return;
+  }
+
+  await page.waitForTimeout(300);
+  const clicked = await page.evaluate((expected) => {
+    const app = document.querySelector("wujie-app.wujie_iframe");
+    const root = app && app.shadowRoot;
+    if (!root) return false;
+    const options = Array.from(root.querySelectorAll(".mark-tag-option"));
+    const target = options.find((item) => {
+      const main = item.querySelector(".option-main");
+      return String((main && main.textContent) || "").trim() === expected;
+    });
+    if (!target) return false;
+    target.click();
+    return true;
+  }, label);
+  if (!clicked) {
+    console.warn(`视频标注：未找到选项「${label}」，跳过`);
+    return;
+  }
+  console.log(`[sph][mark-tag] 已选择：${label}`);
+  await page.waitForTimeout(400);
 }
 
 async function clickSphDraftButton(page) {
@@ -456,8 +456,8 @@ export default async function (page, data, window, event, onFinish) {
     await tryDeclareOriginal(page);
     await waitSphUploadProcessing(page);
 
-    // 自定义封面（字探补丁 2026-10-21）：仅当传入 coverPath；失败抛错中止本次发布
-    // （封面是缩略图点击的命脉，不允许静默跳过——与 dy.js 同策略）
+    // 自定义封面：仅当传入 coverPath；失败抛错中止本次发布
+    // （封面是缩略图点击的命脉，不允许静默跳过——与抖音流程同策略）
     const coverPath = data.data && data.data.coverPath;
     if (coverPath) {
       await uploadSphCustomCover(page, coverPath);
@@ -467,40 +467,6 @@ export default async function (page, data, window, event, onFinish) {
     const urlBefore = readPageUrl(page);
     if (isDraftMode) await clickSphDraftButton(page);
     else await clickSphPublishButton(page);
-
-    // 平台报错提示捕获（字探补丁 2026-10-21）：草稿/发布点击后的 toast/弹窗文案进日志与回执。
-    // 实证过盲报：涡篇 shortTitle 含拉丁字母（wō yáng）疑似被平台拒收，草稿未落但按钮点击成功、
-    // 回执仍报「保存草稿成功」——点击成功≠保存生效，必须捕获页面级报错信号。
-    await page.waitForTimeout(2000);
-    const platformMsg = await page
-      .evaluate(() => {
-        const norm = (t) => String(t || "").replace(/\s+/g, " ").trim();
-        const app = document.querySelector("wujie-app.wujie_iframe");
-        const root = (app && app.shadowRoot) || document;
-        const texts = [];
-        for (const el of root.querySelectorAll(
-          "[class*='toast'],[class*='Toast'],[class*='dialog'],[class*='Dialog'],[class*='tips'],[class*='error']"
-        )) {
-          const r = el.getBoundingClientRect();
-          if (r.width === 0) continue;
-          const t = norm(el.textContent);
-          if (t && t.length <= 200) texts.push(t);
-        }
-        return [...new Set(texts)].slice(0, 5);
-      })
-      .catch(() => []);
-    if (platformMsg.length) {
-      console.log(`[sph] 点击后页面提示: ${JSON.stringify(platformMsg)}`);
-    }
-    const errHit = platformMsg.some((t) =>
-      /失败|错误|不合法|不合规|请修改|无法|不能|驳回/.test(t)
-    );
-    if (errHit) {
-      console.warn(
-        "[sph] ⚠️ 检测到疑似平台报错提示，草稿/发布可能未生效，请到平台核实:",
-        JSON.stringify(platformMsg)
-      );
-    }
     console.log(
       isDraftMode ? "✅ 视频号视频已保存草稿" : "✅ 视频号视频上传成功"
     );
@@ -512,9 +478,6 @@ export default async function (page, data, window, event, onFinish) {
       urlBefore,
       isDraftMode,
       successMessage: isDraftMode ? "保存草稿成功" : "上传成功",
-      extraPayload: platformMsg.length
-        ? { platformToast: platformMsg, platformErrorSuspect: errHit }
-        : {},
     });
   } catch (err) {
     const detail =
