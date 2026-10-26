@@ -192,7 +192,7 @@ function changeData({ item, fileName, type }) {
           const oldItem = list[duplicateIndex] || {};
           const attemptCount = (Number(oldItem.publishAttemptCount) || 1) + 1;
           list[duplicateIndex] = {
-            // 内容字段以最后一次为准（字探补丁 2026-10-21）：旧实现 {...oldItem} 保留首次
+            // 内容字段以最后一次为准：旧实现 {...oldItem} 保留首次
             // 登记字段，导致后补的 coverPath/tags/title 等永远丢失（GUI 重发 coverPath
             // 透传会拿到空值，且与文档「重跑干跑即可刷新登记」相悖）。
             ...newItem,
