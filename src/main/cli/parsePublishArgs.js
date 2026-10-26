@@ -43,6 +43,7 @@ export function parsePublishArgs(subArgv) {
     closeWindowAfterPublish: true,
     dir: null,
     config: null,
+    cover: null,
     creativeStatement: null,
     draft: false,
     sphLinkType: null,
@@ -82,6 +83,8 @@ export function parsePublishArgs(subArgv) {
       out.dir = args[++i];
     } else if (a === "--config" || a === "--xlsx") {
       out.config = args[++i];
+    } else if (a === "--cover") {
+      out.cover = args[++i];
     } else if (a === "--creative-statement" || a === "--cs") {
       out.creativeStatement = args[++i];
     } else if (a === "--draft") {
@@ -331,6 +334,7 @@ export function publishBodyToArgv(body) {
     ["creativeStatement", "creative-statement", "cs"],
     "--creative-statement"
   );
+  pushPair(["cover", "coverPath", "cover-path"], "--cover");
   const sphLink =
     (body.sphLink && typeof body.sphLink === "object" && body.sphLink) ||
     (body.platformOptions &&
@@ -403,6 +407,9 @@ const SHARED_PUBLISH_BODY_KEYS = [
   "creativeStatement",
   "creative-statement",
   "cs",
+  "cover",
+  "coverPath",
+  "cover-path",
   "show",
   "closeWindowAfterPublish",
   "draft",
@@ -632,6 +639,8 @@ export function publishHelpText() {
       --cs, --creative-statement <val>  creative statement value for single-file mode.
                             Valid values: none | ai_generated | fiction | marketing | personal_opinion | repost | self_made_no_repost
                             (self_made_no_repost is blbl-only). Default: none.
+      --cover <path>    自定义封面图片路径（抖音/快手/视频号单文件模式生效；竖封面 3:4 比例最佳，
+                            抖音横封面基于竖封面自动生成；视频号仅收 jpg/png）
       --phone <id>      账号手机号（与 GUI 账号树一致，可与 partition 二选一）
       --partition <p>   完整 session partition，如 persist:13800138000抖音
   -t, --title <text>    视频标题（必填）→ data.title

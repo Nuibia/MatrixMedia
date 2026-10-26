@@ -1,4 +1,5 @@
 import path from "path";
+import fs from "fs";
 import {
   readPageUrl,
   replyPublishFailure,
@@ -299,6 +300,189 @@ async function selectKsCreativeStatement(page, data) {
   console.log("[ks] 已选择声明:", label);
 }
 
+/**
+ * 快手自定义封面（字探补丁 2026-10-21，探针实证配方）：
+ * 封面设置区渲染晚于预览 video（要等「封面设置/智能推荐封面」文案出现）；
+ * 点 [class*="_cover-full-editor"] → ant-modal（封面截取/上传封面两 tab）→
+ * 「上传封面」tab → modal 内隐藏 file input（_cropper-upload-upload）注入 →
+ * 裁剪比例选 3:4（推荐）→ 确认 → 校验 _default-cover 槽位 img src 变化（blob 帧图→新封面）。
+ */
+async function uploadKsCustomCover(page, coverPath) {
+  if (!fs.existsSync(coverPath)) {
+    throw new Error(`封面文件不存在: ${coverPath}`);
+  }
+
+  await page
+    .waitForFunction(
+      () => {
+        const t = document.body.innerText || "";
+        return t.includes("封面设置") || t.includes("智能推荐封面");
+      },
+      { timeout: 60000 }
+    )
+    .catch(() => {
+      throw new Error("等待快手封面设置区出现超时（60s）");
+    });
+
+  const slotSrcBefore = await page.evaluate(() => {
+    const img = document.querySelector('[class*="_default-cover"] img');
+    return img ? img.src : "";
+  });
+
+  const opened = await page.evaluate(() => {
+    const el =
+      document.querySelector('[class*="_cover-full-editor"]') ||
+      document.querySelector('[class*="_default-cover"]');
+    if (!el) return false;
+    el.click();
+    return true;
+  });
+  if (!opened) throw new Error("未找到快手「封面设置」入口");
+  await page.waitForSelector(".ant-modal", { visible: true, timeout: 15000 });
+  await page.waitForTimeout(1200);
+
+  const tabbed = await page.evaluate(() => {
+    const norm = (t) => String(t || "").replace(/\s+/g, "").trim();
+    const m = document.querySelector(".ant-modal");
+    if (!m) return false;
+    for (const el of m.querySelectorAll("*")) {
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || el.children.length > 2) continue;
+      if (norm(el.textContent) === "上传封面") {
+        el.click();
+        return true;
+      }
+    }
+    return false;
+  });
+  if (!tabbed) throw new Error("快手封面弹窗内未找到「上传封面」tab");
+  await page.waitForTimeout(1200);
+
+  const inputHandle = await page.evaluateHandle(() => {
+    const m = document.querySelector(".ant-modal");
+    if (!m) return null;
+    return (
+      m.querySelector('input[type="file"]') ||
+      m.querySelector('[class*="cropper-upload"] input') ||
+      null
+    );
+  });
+  const inputEl = inputHandle.asElement();
+  if (!inputEl) throw new Error("快手封面弹窗内未找到图片 file input");
+  await inputEl.uploadFile(path.resolve(coverPath));
+  console.log("[ks] 封面文件已注入上传区:", coverPath);
+
+  // 等裁剪器加载出图片（canvas 或 cropper/preview img）
+  await page
+    .waitForFunction(
+      () => {
+        const m = document.querySelector(".ant-modal");
+        if (!m) return false;
+        return !!(
+          m.querySelector("canvas") ||
+          m.querySelector('[class*="cropper"] img') ||
+          m.querySelector('[class*="preview"] img')
+        );
+      },
+      { timeout: 20000 }
+    )
+    .catch(() => console.warn("[ks] 未观察到裁剪器加载信号，继续尝试"));
+  await page.waitForTimeout(1500);
+
+  // 裁剪比例选 3:4（推荐）——字探封面 1080x1440 恰为 3:4，选中后无裁损
+  const ratio = await page.evaluate(() => {
+    const norm = (t) => String(t || "").replace(/\s+/g, "").trim();
+    const m = document.querySelector(".ant-modal");
+    if (!m) return { ok: false, reason: "no-modal" };
+    const cands = [];
+    for (const el of m.querySelectorAll('[class*="ratio"] *')) {
+      const t = norm(el.textContent);
+      if ((t === "3:4" || t === "3:4推荐") && el.children.length <= 2) {
+        cands.push(el);
+      }
+    }
+    if (!cands.length) return { ok: false, reason: "no-3:4-option" };
+    cands.sort((a, b) => a.children.length - b.children.length);
+    cands[0].click();
+    return { ok: true, count: cands.length };
+  });
+  console.log("[ks] 裁剪比例 3:4 选择:", JSON.stringify(ratio));
+  await page.waitForTimeout(1000);
+
+  const confirmed = await page.evaluate(() => {
+    const norm = (t) => String(t || "").replace(/\s+/g, "").trim();
+    const m = document.querySelector(".ant-modal");
+    if (!m) return false;
+    for (const b of m.querySelectorAll("button,[role='button']")) {
+      const r = b.getBoundingClientRect();
+      if (r.width > 0 && !b.disabled && norm(b.textContent) === "确认") {
+        b.click();
+        return true;
+      }
+    }
+    return false;
+  });
+  if (!confirmed) throw new Error("快手封面弹窗内未找到「确认」按钮");
+  await page.waitForTimeout(3500);
+
+  // 校验：封面槽位 img src 相对设置前变化（原为 blob: 视频帧图）；快手 CDN 域名为强信号
+  const after = await page.evaluate(() => {
+    const img = document.querySelector('[class*="_default-cover"] img');
+    return img ? img.src : "";
+  });
+  const changed = !!after && after !== slotSrcBefore;
+  if (!changed) {
+    throw new Error(
+      `快手封面设置后槽位图片未变化（src=${(after || "").slice(0, 120)}）`
+    );
+  }
+  const cdn = /ssrcdn|kwaicdn|kwcdn|kscdn|yximgs/.test(after);
+  console.log(
+    `[ks] 自定义封面已设置并校验通过（src变化=true, CDN=${cdn}）: ${after.slice(0, 120)}`
+  );
+}
+
+/**
+ * 互动设置：确保「允许下载此作品」为未勾选（字探要求不可下载）。
+ * 替代原 nth-of-type(2) 盲点：按文字定位+终态校验，UI 重排不会误伤其它互动项。
+ * 「允许别人跟我拍同框」「作品展示在同城页」保持平台默认（同城展示利于地名题本地流量）。
+ */
+async function ensureKsDownloadDisabled(page) {
+  const before = await page.evaluate(() => {
+    const norm = (t) => String(t || "").replace(/\s+/g, "").trim();
+    for (const g of document.querySelectorAll(".ant-checkbox-group")) {
+      for (const lb of g.querySelectorAll("label")) {
+        if (norm(lb.textContent) !== "允许下载此作品") continue;
+        const cb = lb.querySelector('input[type="checkbox"]');
+        const was = cb ? cb.checked : null;
+        if (cb && cb.checked) lb.click();
+        return { found: true, checkedBefore: was };
+      }
+    }
+    return { found: false };
+  });
+  await page.waitForTimeout(600);
+  const checkedAfter = await page.evaluate(() => {
+    const norm = (t) => String(t || "").replace(/\s+/g, "").trim();
+    for (const g of document.querySelectorAll(".ant-checkbox-group")) {
+      for (const lb of g.querySelectorAll("label")) {
+        if (norm(lb.textContent) !== "允许下载此作品") continue;
+        const cb = lb.querySelector('input[type="checkbox"]');
+        return cb ? cb.checked : null;
+      }
+    }
+    return null;
+  });
+  console.log(
+    `[ks] 允许下载此作品: ${JSON.stringify(before)} → 终态 checked=${checkedAfter}`
+  );
+  if (before.found && checkedAfter !== false) {
+    console.warn("[ks] ⚠️ 「允许下载此作品」未能确认为取消勾选，请人工核对");
+  } else if (!before.found) {
+    console.warn("[ks] ⚠️ 未找到「允许下载此作品」复选框（UI 可能改版），请人工核对");
+  }
+}
+
 export default async function (page, data, window, event) {
   const isDraftMode =
     data.publishMode === "draft" || data.publishToDraft === true;
@@ -309,6 +493,45 @@ export default async function (page, data, window, event) {
   try {
     let sel = '#joyride-wrapper input[type="file"]';
     await page.waitForSelector(sel, { timeout: WAIT_SELECTOR_APPEAR_MS });
+    // 清掉上次会话残留的本地编辑态横幅（「继续编辑/放弃」）：快手「取消」离开会保留同分区
+    // 本地编辑态，恢复旧表单会污染本次发布字段，一律放弃重来（每次发布都是全字段现场重填）。
+    try {
+      const discarded = await page.evaluate(() => {
+        const norm = (t) => String(t || "").replace(/\s+/g, "").trim();
+        for (const b of document.querySelectorAll("button,[role='button'],div,span")) {
+          const r = b.getBoundingClientRect();
+          if (r.width === 0 || b.children.length > 1) continue;
+          if (norm(b.textContent) === "放弃") {
+            b.click();
+            return true;
+          }
+        }
+        return false;
+      });
+      if (discarded) {
+        console.log("[ks] 已放弃上次残留的本地编辑态（继续编辑/放弃横幅）");
+        await page.waitForTimeout(1500);
+        // 若出现二次确认弹窗，按「确定/确认/放弃」收敛
+        await page.evaluate(() => {
+          const norm = (t) => String(t || "").replace(/\s+/g, "").trim();
+          const m = document.querySelector(".ant-modal");
+          if (!m || m.getBoundingClientRect().width === 0) return false;
+          for (const b of m.querySelectorAll("button,[role='button']")) {
+            const t = norm(b.textContent);
+            if (["确定", "确认", "放弃"].includes(t) && b.getBoundingClientRect().width > 0) {
+              b.click();
+              return true;
+            }
+          }
+          return false;
+        });
+        await page.waitForTimeout(1000);
+        // 放弃后页面可能回到落地态，重新等 file input
+        await page.waitForSelector(sel, { timeout: WAIT_SELECTOR_APPEAR_MS });
+      }
+    } catch (e) {
+      console.warn("[ks] 残留编辑态清理跳过:", e?.message || e);
+    }
     const uploadInputs = await page.$(sel);
     await uploadInputs.uploadFile(path.resolve(data.filePath));
   } catch (err) {
@@ -325,12 +548,12 @@ export default async function (page, data, window, event) {
     console.error("❌ 快手描述填写失败:", e?.message || e);
     throw e;
   }
+  // 互动设置：确保「允许下载此作品」未勾选（字探要求不可下载；替代旧 nth-of-type(2) 盲点，
+  // 按文字定位+终态校验，UI 重排不会误伤「允许跟拍/同城展示」）
   try {
-    await page.click(".ant-checkbox-group>label:nth-of-type(2)", {
-      delay: 200,
-    });
+    await ensureKsDownloadDisabled(page);
   } catch (e) {
-    console.error("❌ 输入标签失败", e);
+    console.error("❌ 互动设置处理失败", e);
   }
 
   // 选择创作声明（快手只支持 AI 生成 / 演绎情节，其它值跳过）
@@ -350,6 +573,14 @@ export default async function (page, data, window, event) {
       2000,
       "等待快手视频上传完成超时"
     );
+
+    // 自定义封面（字探补丁 2026-10-21）：仅当传入 coverPath；失败抛错中止本次发布
+    // （封面是缩略图点击的命脉，不允许静默跳过——与 dy.js 同策略）
+    const coverPath = data.data && data.data.coverPath;
+    if (coverPath) {
+      await uploadKsCustomCover(page, coverPath);
+    }
+
     await page.waitForFunction(
       (text) => {
         const bar = document.querySelector("#setting-tours + div");

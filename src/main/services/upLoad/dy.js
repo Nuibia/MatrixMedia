@@ -1,4 +1,5 @@
 import path from "path";
+import fs from "fs";
 import { resolveDyCreativeStatementLabel } from "../../../shared/creativeStatement.js";
 import {
   readPageUrl,
@@ -14,6 +15,145 @@ import {
   buildPlatformVideoText,
   normalizeVideoTags,
 } from "../../../shared/videoMetadata.js";
+
+async function dismissDyGuideModals(page) {
+  const closed = await page.evaluate(() => {
+    const norm = (t) => String(t).replace(/\s+/g, "").trim();
+    let n = 0;
+    for (const b of document.querySelectorAll("button, [role='button']")) {
+      const r = b.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0 || b.disabled) continue;
+      const t = norm(b.textContent);
+      if (t === "我知道了" || t === "知道了") {
+        b.click();
+        n++;
+      }
+    }
+    return n;
+  });
+  if (closed > 0) {
+    console.log(`[dy] 已关闭 ${closed} 个引导弹窗`);
+    await page.waitForTimeout(600);
+  }
+  return closed;
+}
+
+/**
+ * 上传自定义竖封面（3:4）。流程经 DOM 探针实证（2026-10）：
+ * 点「选择封面」槽位 → 封面弹窗(.dy-creator-content-modal-wrap) → 点「上传封面」→
+ * 文件注入「点击上传文件或拖拽文件到这里」拖拽区的 input（页面同时存在多个 image
+ * input：商品封面/AI参考图等，必须按容器文案定位，选错会把图喂给 AI 参考图功能）→
+ * 「完成」→ 可能弹「设置横封面获更多流量」引导，点「暂不设置」（横封面会基于竖封面
+ * 自动生成）→ 校验槽位文案变为「编辑封面」。
+ */
+async function uploadDyCustomCover(page, coverPath) {
+  if (!fs.existsSync(coverPath)) {
+    throw new Error(`封面文件不存在: ${coverPath}`);
+  }
+
+  const opened = await page.evaluate(() => {
+    const norm = (t) => String(t).replace(/\s+/g, "").trim();
+    const slots = [...document.querySelectorAll("div,span")].filter((e) => {
+      const r = e.getBoundingClientRect();
+      return (
+        r.width > 30 &&
+        r.height > 30 &&
+        (norm(e.textContent) === "选择封面" || norm(e.textContent) === "编辑封面")
+      );
+    });
+    if (!slots.length) return false;
+    slots[0].click();
+    return true;
+  });
+  if (!opened) throw new Error("未找到「选择封面」入口（视频可能未就绪）");
+  await page.waitForSelector(".dy-creator-content-modal-wrap", {
+    visible: true,
+    timeout: 15000,
+  });
+  await page.waitForTimeout(1500);
+
+  const panelClicked = await page.evaluate(() => {
+    const norm = (t) => String(t).replace(/\s+/g, "").trim();
+    const cands = [...document.querySelectorAll("button,[role='button'],div,span,[class*='tab'],[class*='upload']")].filter((e) => {
+      const r = e.getBoundingClientRect();
+      const t = norm(e.textContent);
+      return r.width > 0 && (t === "上传封面" || t === "+上传封面");
+    });
+    const exact = cands.find((e) => norm(e.textContent) === "上传封面") || cands[0];
+    if (!exact) return false;
+    exact.click();
+    return true;
+  });
+  if (!panelClicked) throw new Error("封面弹窗内未找到「上传封面」入口");
+  await page.waitForTimeout(1500);
+
+  const inputHandle = await page.evaluateHandle(() => {
+    const inputs = [...document.querySelectorAll("input[type=file]")].filter((i) =>
+      /image/.test(i.accept || "")
+    );
+    for (const inp of inputs) {
+      let a = inp;
+      let text = "";
+      for (let k = 0; k < 6 && a; k++) {
+        a = a.parentElement;
+        if (a) text = (a.textContent || "").replace(/\s+/g, " ");
+        if (text.includes("拖拽文件到这里")) return inp;
+      }
+    }
+    return null;
+  });
+  const inputEl = inputHandle.asElement();
+  if (!inputEl) throw new Error("未找到封面上传拖拽区的 file input");
+  await inputEl.uploadFile(path.resolve(coverPath));
+  console.log("[dy] 封面文件已注入上传区:", coverPath);
+
+  await page.waitForTimeout(4000);
+  const done = await page.evaluate(() => {
+    const norm = (t) => String(t).replace(/\s+/g, "").trim();
+    const modal = document.querySelector(".dy-creator-content-modal-wrap");
+    if (!modal) return false;
+    const b = [...modal.querySelectorAll("button,[role='button']")].find(
+      (x) => x.getBoundingClientRect().width > 0 && !x.disabled && norm(x.textContent) === "完成"
+    );
+    if (!b) return false;
+    b.click();
+    return true;
+  });
+  if (!done) throw new Error("封面弹窗内未找到「完成」按钮");
+  await page.waitForTimeout(2500);
+
+  // 「设置横封面获更多流量」引导弹窗 →「暂不设置」；横封面会基于竖封面自动生成
+  await page.evaluate(() => {
+    const norm = (t) => String(t).replace(/\s+/g, "").trim();
+    const b = [...document.querySelectorAll("button,[role='button']")].find(
+      (x) => x.getBoundingClientRect().width > 0 && norm(x.textContent) === "暂不设置"
+    );
+    if (b) b.click();
+  });
+  await page.waitForTimeout(1500);
+
+  // 校验封面已设置：槽位内出现抖音 CDN 图片（「编辑封面」是 hover 蒙层文案，innerText 不可见，
+  // 不能作为校验信号；探针 v3 实证槽位 img src 来自 *-creator-media-private.douyin.com）
+  await page.waitForFunction(
+    () => {
+      for (const e of document.querySelectorAll('[class*="cover"],[class*="Cover"]')) {
+        const r = e.getBoundingClientRect();
+        if (r.width < 50 || r.height < 50 || r.width > 400) continue;
+        const img = e.querySelector("img");
+        if (img && /douyin/.test(img.src || "")) return true;
+      }
+      return false;
+    },
+    { timeout: 20000 }
+  );
+  console.log("[dy] 自定义封面已设置并校验通过（槽位出现封面图）");
+
+  // 抖音把封面写入编辑态（暂存/恢复用）是异步落定的，无可观测信号：
+  // 实证 校验通过后 2s 内「暂存离开」→ 恢复后封面丢失；35s 后暂存 → 封面完好。
+  // 固定等待落定，宁可慢不可丢（封面是缩略图点击的命脉）。
+  await page.waitForTimeout(25000);
+  console.log("[dy] 封面落定等待完成（25s）");
+}
 
 async function selectDyCreativeStatement(page, data) {
   const value = data.data && data.data.creativeStatement;
@@ -76,11 +216,20 @@ async function selectDyCreativeStatement(page, data) {
   }
   await page.waitForTimeout(400);
 
-  // 点击弹窗里的「确认」按钮提交声明
+  // 点击弹窗里的「确认」按钮提交声明（限定到含声明选项的弹窗，避免误点引导弹窗的按钮）
   const confirmed = await page.evaluate(() => {
-    const modal = document.querySelector(".semi-modal-body");
-    const root = modal ? modal.closest(".semi-modal") || modal : document;
-    const btn = root.querySelector(".semi-button.semi-button-primary");
+    const bodies = [...document.querySelectorAll(".semi-modal-body")];
+    const body =
+      bodies.find((b) => b.querySelector(".semi-radio-addon")) ||
+      bodies.find((b) =>
+        /确认|确定/.test(((b.closest(".semi-modal") || b).textContent) || "")
+      ) ||
+      bodies[0];
+    if (!body) return false;
+    const root = body.closest(".semi-modal") || body;
+    const btns = [...root.querySelectorAll(".semi-button.semi-button-primary")];
+    const btn =
+      btns.find((b) => /确认|确定/.test(b.textContent || "")) || btns[0];
     if (btn) {
       btn.click();
       return true;
@@ -92,6 +241,23 @@ async function selectDyCreativeStatement(page, data) {
   }
   console.log("[dy] 已点击声明确认按钮");
   await page.waitForTimeout(400);
+
+  // 校验声明确已生效：下拉文案应显示所选声明，否则抛错交给上层重试
+  await page.waitForFunction(
+    (txt) => {
+      const norm = (t) => String(t).replace(/\s+/g, "").trim();
+      for (const el of document.querySelectorAll("[class]")) {
+        const cls = el.className;
+        if (typeof cls !== "string") continue;
+        if (!cls.split(/\s+/).some((c) => c.startsWith("selectText-"))) continue;
+        if (norm(el.textContent).includes(norm(txt))) return true;
+      }
+      return false;
+    },
+    { timeout: 8000 },
+    label
+  );
+  console.log("[dy] 自主声明已生效:", label);
 }
 
 async function selectDyCreativeStatementWithRetry(page, data, maxMs = 60000) {
@@ -110,18 +276,35 @@ async function selectDyCreativeStatementWithRetry(page, data, maxMs = 60000) {
 }
 
 async function clickDyPublish(page, isDraftMode) {
-  const submitSelector = isDraftMode
-    ? "#popover-tip-container+button"
-    : "#popover-tip-container";
+  if (isDraftMode) {
+    // 新版抖音网页发布页没有「存草稿」按钮：草稿语义 =「暂存离开」（本地暂存编辑状态，
+    // 发布页出现「上次未发布的视频/继续编辑」横幅后恢复，人工核对再发布）。
+    // 按按钮文字定位，避免兄弟选择器在新版 UI 下误点「发布」。
+    const clicked = await page.evaluate(() => {
+      const norm = (t) => String(t).replace(/\s+/g, "").trim();
+      const btns = [...document.querySelectorAll("button, [role='button']")].filter((b) => {
+        const r = b.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && !b.disabled;
+      });
+      const byText = (kw) => btns.find((b) => norm(b.textContent).includes(kw));
+      const target = byText("存草稿") || byText("暂存离开");
+      if (!target) return "";
+      target.click();
+      return norm(target.textContent);
+    });
+    if (!clicked) {
+      throw new Error("未找到「存草稿/暂存离开」按钮（抖音界面可能已改版）");
+    }
+    console.log(`[dy] 已点击「${clicked}」按钮（按文字定位）`);
+    return clicked;
+  }
+  const submitSelector = "#popover-tip-container";
   const submitBtn = await page.waitForSelector(submitSelector, {
     timeout: WAIT_SELECTOR_APPEAR_MS,
   });
   await submitBtn.click({ delay: 200 });
-  console.log(
-    isDraftMode
-      ? "[dy] 已点击存草稿按钮 (#popover-tip-container+button)"
-      : "[dy] 已点击发布入口 (#popover-tip-container)"
-  );
+  console.log("[dy] 已点击发布入口 (#popover-tip-container)");
+  return "发布";
 }
 
 export default async function (page, data, window, event) {
@@ -233,12 +416,60 @@ export default async function (page, data, window, event) {
     });
     if (!saved) throw new Error("未找到保存权限-不允许");
 
+    // 引导浮层（如「视频预览功能」）会挡住后续点击，先关掉
+    await dismissDyGuideModals(page);
+
+    // 自定义封面（可选）：需视频就绪后设置；横封面由抖音基于竖封面自动生成
+    const coverPath = data.data && data.data.coverPath;
+    if (coverPath) {
+      await uploadDyCustomCover(page, coverPath);
+      await dismissDyGuideModals(page);
+    }
+
     // 自主声明入口在视频转码完成后才出现，必须在点击发布前完成
     await selectDyCreativeStatementWithRetry(page, data);
 
+    // 点击前再清一次引导浮层，防止流程期间再次弹出
+    await dismissDyGuideModals(page);
+
     const urlBefore = readPageUrl(page);
     await clickDyPublish(page, isDraftMode);
-    console.log(isDraftMode ? "✅ 抖音视频已保存草稿" : "✅ 抖音视频上传成功");
+
+    if (isDraftMode) {
+      // 「暂存离开」成功的信号：页面回到空白上传页并出现「上次未发布…继续编辑」横幅。
+      // 抖音网页端此动作没有 API 回调，必须做页面级校验，不能点完就报成功。
+      await pollPageUntil(
+        page,
+        () => {
+          const text = document.body
+            ? document.body.innerText.replace(/\s+/g, "")
+            : "";
+          return (
+            text.includes("上次未发布") ||
+            text.includes("继续编辑") ||
+            text.includes("已暂存") ||
+            text.includes("暂存成功")
+          );
+        },
+        30000,
+        1000,
+        "等待「暂存离开」生效超时：未检测到『上次未发布的视频/继续编辑』横幅"
+      );
+      console.log("✅ 抖音编辑状态已暂存（暂存离开）");
+      await replyPublishOutcome({
+        page,
+        data,
+        window,
+        event,
+        urlBefore,
+        isDraftMode,
+        successMessage:
+          "已暂存编辑状态（抖音网页无草稿箱：发布页点「继续编辑」恢复，人工核对后发布）",
+      });
+      return;
+    }
+
+    console.log("✅ 抖音视频上传成功");
     await replyPublishOutcome({
       page,
       data,
@@ -246,7 +477,7 @@ export default async function (page, data, window, event) {
       event,
       urlBefore,
       isDraftMode,
-      successMessage: isDraftMode ? "保存草稿成功" : "上传成功",
+      successMessage: "上传成功",
     });
   } catch (e) {
     const detail = (e && e.message) || String(e);

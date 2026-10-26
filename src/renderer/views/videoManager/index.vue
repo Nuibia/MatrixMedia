@@ -625,6 +625,7 @@ export default {
           tags: sample.tags || sample.bq || "",
           bq: sample.bq || "",
           creativeStatement: sample.creativeStatement,
+          coverPath: sample.coverPath || "",
         },
         records: normalizedDetails.map(({ record, metadata }) => ({
           id: record.id,

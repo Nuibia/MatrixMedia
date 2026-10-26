@@ -128,6 +128,7 @@ async function runSingleFilePublishInner(
       tags: metadata.tags,
       ...metadata.legacy,
       creativeStatement: normalizeCreativeStatement(v.creativeStatement || ""),
+      coverPath: v.cover ? path.resolve(v.cover) : "",
     },
     url: cfg.upload,
     show: v.show,
@@ -162,6 +163,7 @@ async function runSingleFilePublishInner(
     tags: metadata.tags,
     ...metadata.legacy,
     creativeStatement: normalizeCreativeStatement(v.creativeStatement || ""),
+    coverPath: v.cover ? path.resolve(v.cover) : "",
     filePath:
       v.publishAt && isRemotePublishFile(sourceFile)
         ? sourceFile

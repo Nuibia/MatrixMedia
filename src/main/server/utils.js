@@ -192,9 +192,17 @@ function changeData({ item, fileName, type }) {
           const oldItem = list[duplicateIndex] || {};
           const attemptCount = (Number(oldItem.publishAttemptCount) || 1) + 1;
           list[duplicateIndex] = {
-            ...oldItem,
+            // 内容字段以最后一次为准（字探补丁 2026-10-21）：旧实现 {...oldItem} 保留首次
+            // 登记字段，导致后补的 coverPath/tags/title 等永远丢失（GUI 重发 coverPath
+            // 透传会拿到空值，且与文档「重跑干跑即可刷新登记」相悖）。
+            ...newItem,
+            id: oldItem.id || newItem.id,
+            createTime: oldItem.createTime || newItem.createTime,
             publishAttemptCount: attemptCount,
             republishCount: Math.max(0, attemptCount - 1),
+            // 成败计数保留历史累计（newItem 登记时只是初始 0，结果回写走 update 按 id 覆盖）
+            publishSuccessCount: Number(oldItem.publishSuccessCount) || 0,
+            publishFailCount: Number(oldItem.publishFailCount) || 0,
             publishStatus: "publishing",
             // 重新发布已开始，清掉上一轮的失败截图，避免回看到旧画面
             failScreenshot: "",

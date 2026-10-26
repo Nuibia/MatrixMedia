@@ -73,6 +73,11 @@ export const publishVideoTool: Tool = {
         description:
           "Optional creative statement / mark tag. For Shipinhao supports values like none, ai_generated, fiction, or Chinese labels such as 含AI生成内容.",
       },
+      cover: {
+        type: "string",
+        description:
+          "Optional absolute path to a custom cover image. Effective for Douyin (dy), Kuaishou (ks) and Shipinhao (sph) single-file publish; 3:4 portrait ratio recommended (1080x1440 fits all three; Douyin auto-generates the horizontal cover from the portrait one; Shipinhao accepts jpg/png only).",
+      },
       sphProductId: {
         type: "string",
         description:
@@ -130,6 +135,7 @@ export async function handlePublishVideo(
   const draft = args.draft;
   const creativeStatement =
     args.creativeStatement == null ? "" : String(args.creativeStatement).trim();
+  const cover = args.cover == null ? "" : String(args.cover).trim();
   const sphProductId =
     args.sphProductId == null ? "" : String(args.sphProductId).trim();
   const sphDramaId =
@@ -212,6 +218,7 @@ export async function handlePublishVideo(
     ...(show ? ["--show"] : []),
     ...(draft ? ["--draft"] : []),
     ...(creativeStatement ? ["--creative-statement", creativeStatement] : []),
+    ...(cover ? ["--cover", cover] : []),
     ...sphLinkArgs,
   ];
 
