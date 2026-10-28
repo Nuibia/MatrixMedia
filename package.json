@@ -50,6 +50,7 @@
     "test:account-login-window-manager": "node scripts/test-account-login-window-manager.js",
     "test:pick-release-installer": "node scripts/test-pick-release-installer.js",
     "test:publish-abnormal": "node scripts/test-publish-abnormal.js",
+    "test:pushdata-dedupe": "node scripts/test-pushdata-dedupe.js",
     "test:ks-description": "node scripts/test-ks-description.js",
     "test:publish-failure-queue": "node scripts/test-publish-failure-queue.js",
     "test:fail-screenshot": "node scripts/test-fail-screenshot.js",

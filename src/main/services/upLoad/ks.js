@@ -1,4 +1,5 @@
 import path from "path";
+import fs from "fs";
 import {
   readPageUrl,
   replyPublishFailure,
@@ -123,6 +124,152 @@ export async function fillKsDescription(page, fillText, { maxAttempts = 3 } = {}
 
   throw new Error(
     `快手描述填写失败：尝试 ${maxAttempts} 次后文案仍未写入编辑器（编辑器当前 ${landed.length} 字），为避免发出空标题/空简介的作品已中止本次发布`
+  );
+}
+
+/**
+ * 快手自定义封面（探针实证配方）：
+ * 封面设置区渲染晚于预览 video（要等「封面设置/智能推荐封面」文案出现）；
+ * 点 [class*="_cover-full-editor"] → ant-modal（封面截取/上传封面两 tab）→
+ * 「上传封面」tab → modal 内隐藏 file input（_cropper-upload-upload）注入 →
+ * 裁剪比例选 3:4（推荐）→ 确认 → 校验 _default-cover 槽位 img src 变化（blob 帧图→新封面）。
+ */
+async function uploadKsCustomCover(page, coverPath) {
+  if (!fs.existsSync(coverPath)) {
+    throw new Error(`封面文件不存在: ${coverPath}`);
+  }
+
+  await page
+    .waitForFunction(
+      () => {
+        const t = document.body.innerText || "";
+        return t.includes("封面设置") || t.includes("智能推荐封面");
+      },
+      { timeout: 60000 }
+    )
+    .catch(() => {
+      throw new Error("等待快手封面设置区出现超时（60s）");
+    });
+
+  const slotSrcBefore = await page.evaluate(() => {
+    const img = document.querySelector('[class*="_default-cover"] img');
+    return img ? img.src : "";
+  });
+
+  const opened = await page.evaluate(() => {
+    const el =
+      document.querySelector('[class*="_cover-full-editor"]') ||
+      document.querySelector('[class*="_default-cover"]');
+    if (!el) return false;
+    el.click();
+    return true;
+  });
+  if (!opened) throw new Error("未找到快手「封面设置」入口");
+  await page.waitForSelector(".ant-modal", { visible: true, timeout: 15000 });
+  await page.waitForTimeout(1200);
+
+  const tabbed = await page.evaluate(() => {
+    const norm = (t) => String(t || "").replace(/\s+/g, "").trim();
+    const m = document.querySelector(".ant-modal");
+    if (!m) return false;
+    for (const el of m.querySelectorAll("*")) {
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || el.children.length > 2) continue;
+      if (norm(el.textContent) === "上传封面") {
+        el.click();
+        return true;
+      }
+    }
+    return false;
+  });
+  if (!tabbed) throw new Error("快手封面弹窗内未找到「上传封面」tab");
+  await page.waitForTimeout(1200);
+
+  const inputHandle = await page.evaluateHandle(() => {
+    const m = document.querySelector(".ant-modal");
+    if (!m) return null;
+    return (
+      m.querySelector('input[type="file"]') ||
+      m.querySelector('[class*="cropper-upload"] input') ||
+      null
+    );
+  });
+  const inputEl = inputHandle.asElement();
+  if (!inputEl) throw new Error("快手封面弹窗内未找到图片 file input");
+  await inputEl.uploadFile(path.resolve(coverPath));
+  console.log("[ks] 封面文件已注入上传区:", coverPath);
+
+  // 等裁剪器加载出图片（canvas 或 cropper/preview img）
+  await page
+    .waitForFunction(
+      () => {
+        const m = document.querySelector(".ant-modal");
+        if (!m) return false;
+        return !!(
+          m.querySelector("canvas") ||
+          m.querySelector('[class*="cropper"] img') ||
+          m.querySelector('[class*="preview"] img')
+        );
+      },
+      { timeout: 20000 }
+    )
+    .catch(() => console.warn("[ks] 未观察到裁剪器加载信号，继续尝试"));
+  await page.waitForTimeout(1500);
+
+  // 裁剪比例选 3:4（推荐）——3:4 原图（如 1080x1440）选中后无裁损
+  const ratio = await page.evaluate(() => {
+    const norm = (t) => String(t || "").replace(/\s+/g, "").trim();
+    const m = document.querySelector(".ant-modal");
+    if (!m) return { ok: false, reason: "no-modal" };
+    const cands = [];
+    for (const el of m.querySelectorAll('[class*="ratio"] *')) {
+      const t = norm(el.textContent);
+      if ((t === "3:4" || t === "3:4推荐") && el.children.length <= 2) {
+        cands.push(el);
+      }
+    }
+    if (!cands.length) return { ok: false, reason: "no-3:4-option" };
+    cands.sort((a, b) => a.children.length - b.children.length);
+    cands[0].click();
+    return { ok: true, count: cands.length };
+  });
+  console.log("[ks] 裁剪比例 3:4 选择:", JSON.stringify(ratio));
+  // 与其它步骤口径一致：找不到 3:4 选项即失败抛错中止，不容忍平台按默认比例裁剪
+  if (!ratio.ok) {
+    throw new Error(`快手封面裁剪未选到 3:4 比例（${ratio.reason}）`);
+  }
+  await page.waitForTimeout(1000);
+
+  const confirmed = await page.evaluate(() => {
+    const norm = (t) => String(t || "").replace(/\s+/g, "").trim();
+    const m = document.querySelector(".ant-modal");
+    if (!m) return false;
+    for (const b of m.querySelectorAll("button,[role='button']")) {
+      const r = b.getBoundingClientRect();
+      if (r.width > 0 && !b.disabled && norm(b.textContent) === "确认") {
+        b.click();
+        return true;
+      }
+    }
+    return false;
+  });
+  if (!confirmed) throw new Error("快手封面弹窗内未找到「确认」按钮");
+  await page.waitForTimeout(3500);
+
+  // 校验：封面槽位 img src 相对设置前变化（原为 blob: 视频帧图）；快手 CDN 域名为强信号
+  const after = await page.evaluate(() => {
+    const img = document.querySelector('[class*="_default-cover"] img');
+    return img ? img.src : "";
+  });
+  const changed = !!after && after !== slotSrcBefore;
+  if (!changed) {
+    throw new Error(
+      `快手封面设置后槽位图片未变化（src=${(after || "").slice(0, 120)}）`
+    );
+  }
+  const cdn = /ssrcdn|kwaicdn|kwcdn|kscdn|yximgs/.test(after);
+  console.log(
+    `[ks] 自定义封面已设置并校验通过（src变化=true, CDN=${cdn}）: ${after.slice(0, 120)}`
   );
 }
 
@@ -350,6 +497,14 @@ export default async function (page, data, window, event) {
       2000,
       "等待快手视频上传完成超时"
     );
+
+    // 自定义封面：仅当传入 coverPath；失败抛错中止本次发布
+    // （封面是缩略图点击的命脉，不允许静默跳过——与抖音流程同策略）
+    const coverPath = data.data && data.data.coverPath;
+    if (coverPath) {
+      await uploadKsCustomCover(page, coverPath);
+    }
+
     await page.waitForFunction(
       (text) => {
         const bar = document.querySelector("#setting-tours + div");

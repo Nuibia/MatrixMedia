@@ -1,4 +1,5 @@
 import path from "path";
+import fs from "fs";
 import { resolveDyCreativeStatementLabel } from "../../../shared/creativeStatement.js";
 import {
   readPageUrl,
@@ -14,6 +15,167 @@ import {
   buildPlatformVideoText,
   normalizeVideoTags,
 } from "../../../shared/videoMetadata.js";
+
+async function dismissDyGuideModals(page) {
+  const closed = await page.evaluate(() => {
+    const norm = (t) => String(t).replace(/\s+/g, "").trim();
+    let n = 0;
+    for (const b of document.querySelectorAll("button, [role='button']")) {
+      const r = b.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0 || b.disabled) continue;
+      const t = norm(b.textContent);
+      if (t === "我知道了" || t === "知道了") {
+        b.click();
+        n++;
+      }
+    }
+    return n;
+  });
+  if (closed > 0) {
+    console.log(`[dy] 已关闭 ${closed} 个引导弹窗`);
+    await page.waitForTimeout(600);
+  }
+  return closed;
+}
+
+/**
+ * 上传自定义竖封面（3:4）。流程经 DOM 探针实证（2026-10）：
+ * 点「选择封面」槽位 → 封面弹窗(.dy-creator-content-modal-wrap) → 点「上传封面」→
+ * 文件注入「点击上传文件或拖拽文件到这里」拖拽区的 input（页面同时存在多个 image
+ * input：商品封面/AI参考图等，必须按容器文案定位，选错会把图喂给 AI 参考图功能）→
+ * 「完成」→ 可能弹「设置横封面获更多流量」引导，点「暂不设置」（横封面会基于竖封面
+ * 自动生成）→ 校验槽位文案变为「编辑封面」。
+ */
+async function uploadDyCustomCover(page, coverPath) {
+  if (!fs.existsSync(coverPath)) {
+    throw new Error(`封面文件不存在: ${coverPath}`);
+  }
+
+  // 记录设置前封面槽位的 img src：平台自动截帧的默认封面本来就在抖音 CDN 域名下，
+  // 只判「槽位出现 douyin 图」会让上传失败也通过校验；必须对比前后 src 变化（同 ks/sph）
+  const slotSrcsBefore = await page.evaluate(() => {
+    const srcs = [];
+    for (const e of document.querySelectorAll('[class*="cover"],[class*="Cover"]')) {
+      const r = e.getBoundingClientRect();
+      if (r.width < 50 || r.height < 50 || r.width > 400) continue;
+      const img = e.querySelector("img");
+      if (img && img.src) srcs.push(img.src);
+    }
+    return srcs;
+  });
+
+  const opened = await page.evaluate(() => {
+    const norm = (t) => String(t).replace(/\s+/g, "").trim();
+    const slots = [...document.querySelectorAll("div,span")].filter((e) => {
+      const r = e.getBoundingClientRect();
+      return (
+        r.width > 30 &&
+        r.height > 30 &&
+        (norm(e.textContent) === "选择封面" || norm(e.textContent) === "编辑封面")
+      );
+    });
+    if (!slots.length) return false;
+    slots[0].click();
+    return true;
+  });
+  if (!opened) throw new Error("未找到「选择封面」入口（视频可能未就绪）");
+  await page.waitForSelector(".dy-creator-content-modal-wrap", {
+    visible: true,
+    timeout: 15000,
+  });
+  await page.waitForTimeout(1500);
+
+  const panelClicked = await page.evaluate(() => {
+    const norm = (t) => String(t).replace(/\s+/g, "").trim();
+    const cands = [...document.querySelectorAll("button,[role='button'],div,span,[class*='tab'],[class*='upload']")].filter((e) => {
+      const r = e.getBoundingClientRect();
+      const t = norm(e.textContent);
+      return r.width > 0 && (t === "上传封面" || t === "+上传封面");
+    });
+    const exact = cands.find((e) => norm(e.textContent) === "上传封面") || cands[0];
+    if (!exact) return false;
+    exact.click();
+    return true;
+  });
+  if (!panelClicked) throw new Error("封面弹窗内未找到「上传封面」入口");
+  await page.waitForTimeout(1500);
+
+  const inputHandle = await page.evaluateHandle(() => {
+    const inputs = [...document.querySelectorAll("input[type=file]")].filter((i) =>
+      /image/.test(i.accept || "")
+    );
+    for (const inp of inputs) {
+      let a = inp;
+      let text = "";
+      for (let k = 0; k < 6 && a; k++) {
+        a = a.parentElement;
+        if (a) text = (a.textContent || "").replace(/\s+/g, " ");
+        if (text.includes("拖拽文件到这里")) return inp;
+      }
+    }
+    return null;
+  });
+  const inputEl = inputHandle.asElement();
+  if (!inputEl) throw new Error("未找到封面上传拖拽区的 file input");
+  await inputEl.uploadFile(path.resolve(coverPath));
+  console.log("[dy] 封面文件已注入上传区:", coverPath);
+
+  await page.waitForTimeout(4000);
+  const done = await page.evaluate(() => {
+    const norm = (t) => String(t).replace(/\s+/g, "").trim();
+    const modal = document.querySelector(".dy-creator-content-modal-wrap");
+    if (!modal) return false;
+    const b = [...modal.querySelectorAll("button,[role='button']")].find(
+      (x) => x.getBoundingClientRect().width > 0 && !x.disabled && norm(x.textContent) === "完成"
+    );
+    if (!b) return false;
+    b.click();
+    return true;
+  });
+  if (!done) throw new Error("封面弹窗内未找到「完成」按钮");
+  await page.waitForTimeout(2500);
+
+  // 「设置横封面获更多流量」引导弹窗 →「暂不设置」；横封面会基于竖封面自动生成
+  await page.evaluate(() => {
+    const norm = (t) => String(t).replace(/\s+/g, "").trim();
+    const b = [...document.querySelectorAll("button,[role='button']")].find(
+      (x) => x.getBoundingClientRect().width > 0 && norm(x.textContent) === "暂不设置"
+    );
+    if (b) b.click();
+  });
+  await page.waitForTimeout(1500);
+
+  // 校验封面已设置：槽位 img src 相对设置前变化，且新 src 在抖音 CDN 域名下
+  //（「编辑封面」是 hover 蒙层文案，innerText 不可见，不能作为校验信号；
+  // 探针 v3 实证上传落定后槽位 img src 来自 *-creator-media-private.douyin.com）
+  await page.waitForFunction(
+    (prevSrcs) => {
+      for (const e of document.querySelectorAll('[class*="cover"],[class*="Cover"]')) {
+        const r = e.getBoundingClientRect();
+        if (r.width < 50 || r.height < 50 || r.width > 400) continue;
+        const img = e.querySelector("img");
+        if (!img || !img.src) continue;
+        if (/douyin/.test(img.src) && !prevSrcs.includes(img.src)) return true;
+      }
+      return false;
+    },
+    { timeout: 20000 },
+    slotSrcsBefore
+  ).catch(() => {
+    throw new Error(
+      `抖音封面设置后槽位图片未变化（设置前 src: ${JSON.stringify(
+        slotSrcsBefore.map((s) => s.slice(0, 80))
+      )}）`
+    );
+  });
+  console.log("[dy] 自定义封面已设置并校验通过（槽位 src 变化且为抖音 CDN 图）");
+
+  // 抖音把封面写入编辑态（暂存/恢复用）是异步落定的，无可观测信号：
+  // 实证 校验通过后 2s 内「暂存离开」→ 恢复后封面丢失；35s 后暂存 → 封面完好。
+  // 固定等待落定，宁可慢不可丢（封面是缩略图点击的命脉）。
+  await page.waitForTimeout(25000);
+  console.log("[dy] 封面落定等待完成（25s）");
+}
 
 async function selectDyCreativeStatement(page, data) {
   const value = data.data && data.data.creativeStatement;
@@ -232,6 +394,16 @@ export default async function (page, data, window, event) {
       return false;
     });
     if (!saved) throw new Error("未找到保存权限-不允许");
+
+    // 引导浮层（如「视频预览功能」）会挡住后续点击，先关掉
+    await dismissDyGuideModals(page);
+
+    // 自定义封面（可选）：需视频就绪后设置；横封面由抖音基于竖封面自动生成
+    const coverPath = data.data && data.data.coverPath;
+    if (coverPath) {
+      await uploadDyCustomCover(page, coverPath);
+      await dismissDyGuideModals(page);
+    }
 
     // 自主声明入口在视频转码完成后才出现，必须在点击发布前完成
     await selectDyCreativeStatementWithRetry(page, data);

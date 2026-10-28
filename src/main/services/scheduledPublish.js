@@ -135,6 +135,9 @@ export function buildTaskPayloadFromRecord(record) {
       tags: metadata.tags,
       ...metadata.legacy,
       creativeStatement: normalizeCreativeStatement(record.creativeStatement),
+      // 定时视频发布透传封面（dy/ks/sph 读 data.data.coverPath，
+      // 缺失会静默跳过自定义封面；文章分支一直有传，视频分支上游漏了）
+      coverPath: record.coverPath || "",
     },
     textOtherName: record.textOtherName || "",
     selectedFile: record.selectedFile || path.basename(record.filePath || ""),

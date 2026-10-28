@@ -192,9 +192,19 @@ function changeData({ item, fileName, type }) {
           const oldItem = list[duplicateIndex] || {};
           const attemptCount = (Number(oldItem.publishAttemptCount) || 1) + 1;
           list[duplicateIndex] = {
+            // 以 oldItem 为基底保留历史字段（videoLink / publishAbnormalCount /
+            // needsAttention 等由后续 update 写入、登记时的 newItem 上没有），
+            // 再叠 newItem 让内容字段以最后一次为准：后补的 coverPath/tags/title
+            // 能覆盖旧值（含显式空值），与文档「重跑干跑即可刷新登记」一致。
             ...oldItem,
+            ...newItem,
+            id: oldItem.id || newItem.id,
+            createTime: oldItem.createTime || newItem.createTime,
             publishAttemptCount: attemptCount,
             republishCount: Math.max(0, attemptCount - 1),
+            // 成败计数保留历史累计（newItem 登记时只是初始 0，结果回写走 update 按 id 覆盖）
+            publishSuccessCount: Number(oldItem.publishSuccessCount) || 0,
+            publishFailCount: Number(oldItem.publishFailCount) || 0,
             publishStatus: "publishing",
             // 重新发布已开始，清掉上一轮的失败截图，避免回看到旧画面
             failScreenshot: "",

@@ -1,4 +1,5 @@
 import path from "path";
+import fs from "fs";
 import maybeClosePublishWindow from "./closeWindow.js";
 import { resolveVideoLinkOption } from "../../../shared/videoLink.js";
 import {
@@ -99,6 +100,162 @@ async function tryDeclareOriginal(page) {
     await aBtn.click();
   } catch (_) {
     console.log("声明原创：未出现后续确认框或已完成，跳过");
+  }
+}
+
+/**
+ * 视频号自定义封面（探针实证配方）：
+ * 点 .vertical-cover-wrap 槽位 → weui-desktop-dialog「编辑封面」→「上传封面」→
+ * .single-cover-uploader-wrap 内隐藏 file input（accept=jpeg/jpg/png，勿传 webp）注入 →
+ * 「确定」→ 校验 .cover-img-vertical 槽位 img src 变化 + 弹窗已关闭。
+ * 封面为「个人主页和分享卡片(3:4)」——3:4 竖图（如 1080x1440）恰好匹配。
+ */
+async function uploadSphCustomCover(page, coverPath) {
+  if (!fs.existsSync(coverPath)) {
+    throw new Error(`封面文件不存在: ${coverPath}`);
+  }
+
+  const srcBefore = await page.evaluate(() => {
+    const app = document.querySelector("wujie-app.wujie_iframe");
+    const root = app && app.shadowRoot;
+    const img = root && root.querySelector(".cover-img-vertical");
+    return img ? img.src : "";
+  });
+
+  const opened = await page.evaluate(() => {
+    const app = document.querySelector("wujie-app.wujie_iframe");
+    const root = app && app.shadowRoot;
+    if (!root) return false;
+    const slot =
+      root.querySelector(".vertical-cover-wrap") ||
+      root.querySelector(".cover-preview-wrap");
+    if (!slot) return false;
+    slot.click();
+    return true;
+  });
+  if (!opened) throw new Error("未找到视频号封面编辑入口（.vertical-cover-wrap）");
+
+  // 等「编辑封面」弹窗可见
+  await page.waitForFunction(
+    () => {
+      const app = document.querySelector("wujie-app.wujie_iframe");
+      const root = app && app.shadowRoot;
+      if (!root) return false;
+      for (const d of root.querySelectorAll(".weui-desktop-dialog")) {
+        const t = (d.textContent || "").replace(/\s+/g, "");
+        const r = d.getBoundingClientRect();
+        if (t.includes("编辑封面") && r.width > 0) return true;
+      }
+      return false;
+    },
+    { timeout: 15000 }
+  );
+  await page.waitForTimeout(1200);
+
+  // 切到「上传封面」
+  const tabbed = await page.evaluate(() => {
+    const norm = (t) => String(t || "").replace(/\s+/g, "").trim();
+    const app = document.querySelector("wujie-app.wujie_iframe");
+    const root = app && app.shadowRoot;
+    if (!root) return false;
+    const dlg = [...root.querySelectorAll(".weui-desktop-dialog")].find(
+      (d) =>
+        (d.textContent || "").includes("编辑封面") &&
+        d.getBoundingClientRect().width > 0
+    );
+    if (!dlg) return false;
+    for (const el of dlg.querySelectorAll("*")) {
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || el.children.length > 2) continue;
+      if (norm(el.textContent) === "上传封面") {
+        el.click();
+        return true;
+      }
+    }
+    return false;
+  });
+  if (!tabbed) throw new Error("视频号封面弹窗内未找到「上传封面」入口");
+  await page.waitForTimeout(1200);
+
+  // 注入图片文件（探针实证：input 挂 .single-cover-uploader-wrap，隐藏可注入）
+  const inputHandle = await page.evaluateHandle(() => {
+    const app = document.querySelector("wujie-app.wujie_iframe");
+    const root = app && app.shadowRoot;
+    if (!root) return null;
+    return (
+      root.querySelector('.single-cover-uploader-wrap input[type="file"]') ||
+      [...root.querySelectorAll('input[type="file"]')].find((i) =>
+        /image/.test(i.accept || "")
+      ) ||
+      null
+    );
+  });
+  const inputEl = inputHandle.asElement();
+  if (!inputEl) throw new Error("未找到视频号封面上传 file input");
+  await inputEl.uploadFile(path.resolve(coverPath));
+  console.log("[sph] 封面文件已注入上传区:", coverPath);
+
+  // 等上传+裁剪视图落定（1080x1440 与 3:4 槽位同比，通常无强制裁剪步骤）
+  await page.waitForTimeout(5000);
+
+  // 点「确定」（兜底再试「确认」）
+  const confirmed = await page.evaluate(() => {
+    const norm = (t) => String(t || "").replace(/\s+/g, "").trim();
+    const app = document.querySelector("wujie-app.wujie_iframe");
+    const root = app && app.shadowRoot;
+    if (!root) return { ok: false, reason: "no-shadow" };
+    const dlg = [...root.querySelectorAll(".weui-desktop-dialog")].find(
+      (d) =>
+        (d.textContent || "").includes("编辑封面") &&
+        d.getBoundingClientRect().width > 0
+    );
+    if (!dlg) return { ok: false, reason: "no-dialog" };
+    for (const label of ["确定", "确认"]) {
+      for (const b of dlg.querySelectorAll(
+        "button,.weui-desktop-btn,[role='button']"
+      )) {
+        const r = b.getBoundingClientRect();
+        if (r.width > 0 && !b.disabled && norm(b.textContent) === label) {
+          b.click();
+          return { ok: true, label };
+        }
+      }
+    }
+    return { ok: false, reason: "no-确定/确认" };
+  });
+  if (!confirmed.ok) {
+    throw new Error(`视频号封面弹窗确认失败: ${confirmed.reason}`);
+  }
+  console.log("[sph] 封面弹窗已点「" + confirmed.label + "」");
+  await page.waitForTimeout(3500);
+
+  // 校验：弹窗已关 + 槽位 img src 相对设置前变化；微信 CDN 域名为强信号
+  const after = await page.evaluate(() => {
+    const app = document.querySelector("wujie-app.wujie_iframe");
+    const root = app && app.shadowRoot;
+    if (!root) return { src: "", dialogOpen: false };
+    const img = root.querySelector(".cover-img-vertical");
+    const dlg = [...root.querySelectorAll(".weui-desktop-dialog")].find(
+      (d) =>
+        (d.textContent || "").includes("编辑封面") &&
+        d.getBoundingClientRect().width > 0
+    );
+    return { src: img ? img.src : "", dialogOpen: !!dlg };
+  });
+  const changed = !!after.src && after.src !== srcBefore;
+  if (!changed) {
+    throw new Error(
+      `视频号封面设置后槽位图片未变化（src=${(after.src || "").slice(0, 120)}, 弹窗仍开=${after.dialogOpen}）`
+    );
+  }
+  const cdn = /qpic|weixin|wechat|wx\.qq|qq\.com/.test(after.src);
+  console.log(
+    `[sph] 自定义封面已设置并校验通过（src变化=true, CDN=${cdn}, 弹窗已关=${!after.dialogOpen}）: ${after.src.slice(0, 120)}`
+  );
+  if (after.dialogOpen) {
+    console.warn("[sph] ⚠️ 封面弹窗未关闭，尝试 Esc 收敛");
+    await page.keyboard.press("Escape").catch(() => {});
+    await page.waitForTimeout(1000);
   }
 }
 
@@ -298,6 +455,13 @@ export default async function (page, data, window, event, onFinish) {
 
     await tryDeclareOriginal(page);
     await waitSphUploadProcessing(page);
+
+    // 自定义封面：仅当传入 coverPath；失败抛错中止本次发布
+    // （封面是缩略图点击的命脉，不允许静默跳过——与抖音流程同策略）
+    const coverPath = data.data && data.data.coverPath;
+    if (coverPath) {
+      await uploadSphCustomCover(page, coverPath);
+    }
 
     // 所有表单项（包括商品）完成后，草稿和发布只能二选一执行。
     const urlBefore = readPageUrl(page);

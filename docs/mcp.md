@@ -109,6 +109,7 @@ MCP Server 按以下顺序寻找 MatrixMedia：环境变量 `MATRIXMEDIA_BIN`（
 | `publishAt`    | 否   | 定时发布，`YYYY-MM-DD HH:mm:ss`                               |
 | `show`         | 否   | 是否显示底层浏览器窗口                                        |
 | `draft`             | 否   | `true` 时保存到草稿箱，不直接发布                             |
+| `cover`             | 否   | 自定义封面图片路径（抖音 / 快手 / 视频号；竖封面 3:4 比例最佳，抖音横封面基于竖封面自动生成；视频号仅收 jpg/png） |
 | `creativeStatement` | 否   | 创作声明 / 视频号视频标注                                     |
 | `sphProductId`      | 否   | 视频号商品上架编号（推荐） |
 | `sphDramaId`        | 否   | 视频号小程序短剧挂载（**短剧名称**，如 `泳陷错恋`）                          |

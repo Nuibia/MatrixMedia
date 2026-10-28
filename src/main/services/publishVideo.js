@@ -1,5 +1,6 @@
 "use strict";
 
+import fs from "fs";
 import path from "path";
 import { normalizeCreativeStatement } from "../../shared/creativeStatement.js";
 import ptConfig from "../config/ptConfig";
@@ -40,6 +41,26 @@ function derivePhoneForRecord(v) {
 }
 
 /**
+ * 提前校验封面文件（在视频上传/下载之前拦截，避免大文件白传一次）：
+ * 文件必须存在；视频号仅收 jpg/png（上传控件 accept 限制）。
+ * @returns {{ ok: true, coverPath: string } | { ok: false, message: string }}
+ */
+function resolveCoverPath(v) {
+  if (!v.cover) return { ok: true, coverPath: "" };
+  const coverPath = path.resolve(v.cover);
+  if (!fs.existsSync(coverPath) || !fs.statSync(coverPath).isFile()) {
+    return { ok: false, message: `封面文件不存在: ${coverPath}` };
+  }
+  if (v.platform === "视频号" && !/\.(jpe?g|png)$/i.test(coverPath)) {
+    return {
+      ok: false,
+      message: `视频号封面仅支持 jpg/png 格式: ${coverPath}`,
+    };
+  }
+  return { ok: true, coverPath };
+}
+
+/**
  * 单文件发布（与 cli publish 单文件模式一致）
  * @param {object} v parsePublishArgs 解析后的参数
  * @param {{ sourceFile: string, resolvedFile: string } | null} fileContext 多平台复用已下载文件时传入
@@ -63,6 +84,13 @@ export async function runSingleFilePublish(
   const stem = fileStemFromSource(sourceFile);
   const metadata = normalizeVideoMetadata(v, v.platform);
   const bookName = (v.bookName && String(v.bookName).trim()) || stem;
+
+  // 封面文件在组装参数时就校验（存在性 / 视频号 jpg|png），失败早于视频下载与上传
+  const cover = resolveCoverPath(v);
+  if (!cover.ok) {
+    return { exitCode: 2, status: "failed", message: cover.message };
+  }
+  const coverPath = cover.coverPath;
 
   let cleanupDownload = null;
   let resolvedFile = sourceFile;
@@ -95,6 +123,7 @@ export async function runSingleFilePublish(
         stem,
         metadata,
         bookName,
+        coverPath,
       },
       options
     );
@@ -106,7 +135,7 @@ export async function runSingleFilePublish(
 async function runSingleFilePublishInner(
   v,
   cfg,
-  { sourceFile, resolvedFile, stem, metadata, bookName },
+  { sourceFile, resolvedFile, stem, metadata, bookName, coverPath = "" },
   options = {}
 ) {
   // 结合「请求显式 draft」与账号「默认发布到草稿」设置，算出最终发布模式
@@ -128,6 +157,7 @@ async function runSingleFilePublishInner(
       tags: metadata.tags,
       ...metadata.legacy,
       creativeStatement: normalizeCreativeStatement(v.creativeStatement || ""),
+      coverPath,
     },
     url: cfg.upload,
     show: v.show,
@@ -162,6 +192,7 @@ async function runSingleFilePublishInner(
     tags: metadata.tags,
     ...metadata.legacy,
     creativeStatement: normalizeCreativeStatement(v.creativeStatement || ""),
+    coverPath,
     filePath:
       v.publishAt && isRemotePublishFile(sourceFile)
         ? sourceFile

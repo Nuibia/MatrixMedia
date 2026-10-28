@@ -689,6 +689,7 @@ export default {
       publishAt: "",
       republishContext: null,
       republishTextOtherName: "",
+      republishCoverPath: "",
       showLoginDialog: false,
       loginData: {},
       treeData: [],
@@ -887,6 +888,7 @@ export default {
       this.publishAt = "";
       this.republishContext = null;
       this.republishTextOtherName = "";
+      this.republishCoverPath = "";
       this.metaVisible = true;
     },
     openRepublish(payload = {}) {
@@ -912,6 +914,7 @@ export default {
       this.scheduledPublish = false;
       this.publishAt = "";
       this.republishTextOtherName = payload.textOtherName || fileStem(filePath);
+      this.republishCoverPath = form.coverPath || "";
       this.republishContext = {
         records: Array.isArray(payload.records) ? payload.records : [],
         failedTargets: Array.isArray(payload.failedTargets)
@@ -998,6 +1001,7 @@ export default {
           tags: metadata.tags,
           ...metadata.legacy,
           bq: formatBqFromTags(this.bqTags),
+          coverPath: this.republishCoverPath || "",
         },
       };
     },
@@ -1583,6 +1587,7 @@ export default {
       this.publishAt = "";
       this.republishContext = null;
       this.republishTextOtherName = "";
+      this.republishCoverPath = "";
       this.dirBatchFiles = [];
       this.attrsVisible = false;
     },
