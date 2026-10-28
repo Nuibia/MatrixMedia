@@ -192,9 +192,11 @@ function changeData({ item, fileName, type }) {
           const oldItem = list[duplicateIndex] || {};
           const attemptCount = (Number(oldItem.publishAttemptCount) || 1) + 1;
           list[duplicateIndex] = {
-            // 内容字段以最后一次为准：旧实现 {...oldItem} 保留首次
-            // 登记字段，导致后补的 coverPath/tags/title 等永远丢失（GUI 重发 coverPath
-            // 透传会拿到空值，且与文档「重跑干跑即可刷新登记」相悖）。
+            // 以 oldItem 为基底保留历史字段（videoLink / publishAbnormalCount /
+            // needsAttention 等由后续 update 写入、登记时的 newItem 上没有），
+            // 再叠 newItem 让内容字段以最后一次为准：后补的 coverPath/tags/title
+            // 能覆盖旧值（含显式空值），与文档「重跑干跑即可刷新登记」一致。
+            ...oldItem,
             ...newItem,
             id: oldItem.id || newItem.id,
             createTime: oldItem.createTime || newItem.createTime,
