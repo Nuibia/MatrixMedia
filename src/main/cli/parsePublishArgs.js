@@ -211,6 +211,11 @@ export function parsePublishArgs(subArgv) {
       error: "--dir 批量模式必须同时提供 --config <xlsx路径>",
     };
   }
+  if (out.dir && out.cover) {
+    console.warn(
+      "MatrixMedia: --dir/--config 批量模式暂不支持 --cover，已忽略（批量任务不会设置自定义封面）。"
+    );
+  }
 
   if (!out.partition) {
     if (!out.phone) {
