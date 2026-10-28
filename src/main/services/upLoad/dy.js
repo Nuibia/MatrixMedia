@@ -51,6 +51,19 @@ async function uploadDyCustomCover(page, coverPath) {
     throw new Error(`封面文件不存在: ${coverPath}`);
   }
 
+  // 记录设置前封面槽位的 img src：平台自动截帧的默认封面本来就在抖音 CDN 域名下，
+  // 只判「槽位出现 douyin 图」会让上传失败也通过校验；必须对比前后 src 变化（同 ks/sph）
+  const slotSrcsBefore = await page.evaluate(() => {
+    const srcs = [];
+    for (const e of document.querySelectorAll('[class*="cover"],[class*="Cover"]')) {
+      const r = e.getBoundingClientRect();
+      if (r.width < 50 || r.height < 50 || r.width > 400) continue;
+      const img = e.querySelector("img");
+      if (img && img.src) srcs.push(img.src);
+    }
+    return srcs;
+  });
+
   const opened = await page.evaluate(() => {
     const norm = (t) => String(t).replace(/\s+/g, "").trim();
     const slots = [...document.querySelectorAll("div,span")].filter((e) => {
@@ -132,21 +145,30 @@ async function uploadDyCustomCover(page, coverPath) {
   });
   await page.waitForTimeout(1500);
 
-  // 校验封面已设置：槽位内出现抖音 CDN 图片（「编辑封面」是 hover 蒙层文案，innerText 不可见，
-  // 不能作为校验信号；探针 v3 实证槽位 img src 来自 *-creator-media-private.douyin.com）
+  // 校验封面已设置：槽位 img src 相对设置前变化，且新 src 在抖音 CDN 域名下
+  //（「编辑封面」是 hover 蒙层文案，innerText 不可见，不能作为校验信号；
+  // 探针 v3 实证上传落定后槽位 img src 来自 *-creator-media-private.douyin.com）
   await page.waitForFunction(
-    () => {
+    (prevSrcs) => {
       for (const e of document.querySelectorAll('[class*="cover"],[class*="Cover"]')) {
         const r = e.getBoundingClientRect();
         if (r.width < 50 || r.height < 50 || r.width > 400) continue;
         const img = e.querySelector("img");
-        if (img && /douyin/.test(img.src || "")) return true;
+        if (!img || !img.src) continue;
+        if (/douyin/.test(img.src) && !prevSrcs.includes(img.src)) return true;
       }
       return false;
     },
-    { timeout: 20000 }
-  );
-  console.log("[dy] 自定义封面已设置并校验通过（槽位出现封面图）");
+    { timeout: 20000 },
+    slotSrcsBefore
+  ).catch(() => {
+    throw new Error(
+      `抖音封面设置后槽位图片未变化（设置前 src: ${JSON.stringify(
+        slotSrcsBefore.map((s) => s.slice(0, 80))
+      )}）`
+    );
+  });
+  console.log("[dy] 自定义封面已设置并校验通过（槽位 src 变化且为抖音 CDN 图）");
 
   // 抖音把封面写入编辑态（暂存/恢复用）是异步落定的，无可观测信号：
   // 实证 校验通过后 2s 内「暂存离开」→ 恢复后封面丢失；35s 后暂存 → 封面完好。
@@ -382,7 +404,6 @@ export default async function (page, data, window, event) {
       await uploadDyCustomCover(page, coverPath);
       await dismissDyGuideModals(page);
     }
-
 
     // 自主声明入口在视频转码完成后才出现，必须在点击发布前完成
     await selectDyCreativeStatementWithRetry(page, data);

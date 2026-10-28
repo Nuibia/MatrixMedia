@@ -234,6 +234,10 @@ async function uploadKsCustomCover(page, coverPath) {
     return { ok: true, count: cands.length };
   });
   console.log("[ks] 裁剪比例 3:4 选择:", JSON.stringify(ratio));
+  // 与其它步骤口径一致：找不到 3:4 选项即失败抛错中止，不容忍平台按默认比例裁剪
+  if (!ratio.ok) {
+    throw new Error(`快手封面裁剪未选到 3:4 比例（${ratio.reason}）`);
+  }
   await page.waitForTimeout(1000);
 
   const confirmed = await page.evaluate(() => {
