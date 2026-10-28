@@ -23,11 +23,23 @@ function listDateFiles(dir) {
     .sort((a, b) => b.ts - a.ts);
 }
 
-function normalizeStatus(item) {
+// 与 GUI「视频管理」publishStatusText 认识的状态保持一致（#47）：
+// 草稿/异常/跳过必须原样保留，不能被成功计数兜底成 success
+const KNOWN_STATUSES = new Set([
+  "success",
+  "failed",
+  "publishing",
+  "scheduled",
+  "expired",
+  "draft",
+  "drafting",
+  "abnormal",
+  "skipped",
+]);
+
+export function normalizeStatus(item) {
   const raw = String(item.publishStatus || "").toLowerCase();
-  if (raw === "success" || raw === "failed" || raw === "publishing" || raw === "scheduled" || raw === "expired") {
-    return raw;
-  }
+  if (KNOWN_STATUSES.has(raw)) return raw;
   if (raw === "fail") return "failed";
   if (Number(item.publishSuccessCount) > 0) return "success";
   if (Number(item.publishFailCount) > 0) return "failed";
@@ -39,6 +51,10 @@ function statusLabel(s) {
   if (s === "failed") return "失败";
   if (s === "scheduled") return "等待定时发布";
   if (s === "expired") return "任务过期";
+  if (s === "draft") return "已保存草稿";
+  if (s === "drafting") return "保存草稿中";
+  if (s === "abnormal") return "发布异常";
+  if (s === "skipped") return "已跳过";
   return "发布中";
 }
 
@@ -156,8 +172,18 @@ export function runHistoryCli(options) {
   const pubN = rows.filter(r => r.status === "publishing").length;
   const scheduledN = rows.filter(r => r.status === "scheduled").length;
   const expiredN = rows.filter(r => r.status === "expired").length;
+  const extra = [
+    ["draft", "已保存草稿"],
+    ["drafting", "保存草稿中"],
+    ["abnormal", "发布异常"],
+    ["skipped", "已跳过"],
+  ]
+    .map(([s, label]) => [label, rows.filter(r => r.status === s).length])
+    .filter(([, n]) => n > 0)
+    .map(([label, n]) => ` / ${label} ${n}`)
+    .join("");
   console.log(
-    `\n共 ${rows.length} 条记录，显示前 ${limited.length}：成功 ${okN} / 失败 ${failN} / 发布中 ${pubN} / 等待定时 ${scheduledN} / 任务过期 ${expiredN}`
+    `\n共 ${rows.length} 条记录，显示前 ${limited.length}：成功 ${okN} / 失败 ${failN} / 发布中 ${pubN} / 等待定时 ${scheduledN} / 任务过期 ${expiredN}${extra}`
   );
   return 0;
 }
